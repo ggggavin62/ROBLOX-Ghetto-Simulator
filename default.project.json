@@ -1,0 +1,64 @@
+{
+  "name": "UrbanFPS_Battlegrounds",
+  "tree": {
+    "$className": "DataModel",
+
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$path": "src/server",
+      "ServerEvents": {
+        "$className": "Folder",
+        "KillRegistered": {
+          "$className": "BindableEvent"
+        }
+      }
+    },
+
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$properties": {
+        "CameraMode": "LockFirstPerson"
+      },
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "$path": "src/client"
+      }
+    },
+
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Shared": {
+        "$className": "Folder",
+        "$path": "src/shared"
+      },
+      "Events": {
+        "$className": "Folder",
+        "WeaponFired": {
+          "$className": "RemoteEvent"
+        },
+        "ReloadState": {
+          "$className": "RemoteEvent"
+        },
+        "HitConfirmed": {
+          "$className": "RemoteEvent"
+        },
+        "KillFeed": {
+          "$className": "RemoteEvent"
+        },
+        "RoundState": {
+          "$className": "RemoteEvent"
+        },
+        "WeaponPickup": {
+          "$className": "RemoteEvent"
+        }
+      }
+    },
+
+    "Workspace": {
+      "$className": "Workspace",
+      "NPCs": {
+        "$className": "Folder"
+      }
+    }
+  }
+}

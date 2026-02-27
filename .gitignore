@@ -1,0 +1,16 @@
+# Aftman binaries
+.aftman/
+
+# Rojo project cache / temp
+*.lock
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# VSCode local settings (keep extensions.json if you want)
+.vscode/
+
+# Claude Code session data
+.claude/

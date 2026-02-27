@@ -1,0 +1,5 @@
+# Aftman toolchain manifest for Urban FPS Battlegrounds
+# https://github.com/LPGhatguy/aftman
+
+[tools]
+rojo = "rojo-rbx/rojo@7.4.4"
