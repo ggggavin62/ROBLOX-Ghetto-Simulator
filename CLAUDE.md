@@ -25,3 +25,6 @@
 ## 5. UI Design
 - Minimalist FPS UI. Health bar in bottom left, Ammo counter in bottom right.
 - Crosshair must be a simple dot in the center of the screen.
+
+6. Github Backup - use the below command whenever i ask ot back up ot github
+git add -A && git commit -m "your message" && git push

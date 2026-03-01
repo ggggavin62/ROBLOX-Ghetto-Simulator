@@ -3,6 +3,9 @@
 	WeaponDamage.server.luau
 	Sole authority for applying player weapon damage.
 
+	Networking: Warp (Packages/Warp) — high-performance batched RemoteEvent replacement.
+	  All event names are registered via reg_namespaces() at startup.
+
 	Validation chain (all checks must pass in order):
 	  1. Valid weaponKey  — must exist in WeaponData
 	  2. Rate limit       — elapsed >= weapon.FireRate since last shot
@@ -34,14 +37,26 @@ local sharedFolder = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData   = require(sharedFolder:WaitForChild("WeaponData")) :: { [string]: Weapon }
 
 -- ============================================================
+-- Warp Networking
+-- ============================================================
+
+local Warp: any = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Warp"))
+
+-- One event object per identifier  (Warp v1.0.14 API)
+local WeaponFiredEvent   = Warp.Server("WeaponFired")
+local ReloadStateEvent   = Warp.Server("ReloadState")
+local HitConfirmedEvent  = Warp.Server("HitConfirmed")
+local KillFeedEvent      = Warp.Server("KillFeed")
+local _WeaponPickupEvent = Warp.Server("WeaponPickup")  -- declared so client identifier sync works
+
+-- ============================================================
 -- Constants
 -- ============================================================
 
-local HEADSHOT_MULTIPLIER: number = 2.0   -- applied for single-bullet weapons only
+local HEADSHOT_MULTIPLIER: number = 2.0   -- single-bullet weapons only
 local LOS_TOLERANCE: number       = 5     -- max stud delta between server/client hit positions
 local DIST_MISMATCH_TOL: number   = 15    -- max stud delta between client dist and server geometry
 
--- Max raycast distance per weapon type (must match client)
 local MAX_DIST_BY_TYPE: { [string]: number } = {
 	Pistol  = 100,
 	SMG     = 80,
@@ -50,7 +65,6 @@ local MAX_DIST_BY_TYPE: { [string]: number } = {
 	Sniper  = 600,
 }
 
--- Reload duration per weapon type (must match client)
 local RELOAD_TIME_BY_TYPE: { [string]: number } = {
 	Pistol  = 1.5,
 	SMG     = 2.0,
@@ -68,14 +82,8 @@ local function getReloadTime(weaponType: string): number
 end
 
 -- ============================================================
--- Remote / Bindable Events
+-- Bindable Events (server-internal)
 -- ============================================================
-
-local eventsFolder   = ReplicatedStorage:WaitForChild("Events")
-local WeaponFired    = eventsFolder:WaitForChild("WeaponFired")   :: RemoteEvent
-local ReloadState    = eventsFolder:WaitForChild("ReloadState")   :: RemoteEvent
-local HitConfirmed   = eventsFolder:WaitForChild("HitConfirmed")  :: RemoteEvent
-local KillFeed       = eventsFolder:WaitForChild("KillFeed")      :: RemoteEvent
 
 local serverEvents   = ServerScriptService:WaitForChild("ServerEvents")
 local KillRegistered = serverEvents:WaitForChild("KillRegistered") :: BindableEvent
@@ -90,8 +98,8 @@ type AmmoState = {
 }
 
 -- playerAmmo[player][weaponKey] = AmmoState
-local playerAmmo:    { [Player]: { [string]: AmmoState } } = {}
-local lastFireTime:  { [Player]: { [string]: number } }   = {}
+local playerAmmo:   { [Player]: { [string]: AmmoState } } = {}
+local lastFireTime: { [Player]: { [string]: number } }    = {}
 
 local function initPlayer(player: Player)
 	playerAmmo[player]   = {}
@@ -123,25 +131,25 @@ local function serverReload(player: Player, key: string)
 	local ammoMap = playerAmmo[player]
 	if not ammoMap then return end
 
-	local ammo   = ammoMap[key]
-	local weapon = WeaponData[key]
-	if not ammo or not weapon then return end
+	local ammo = ammoMap[key]
+	local w    = WeaponData[key]
+	if not ammo or not w then return end
 	if ammo.isReloading then return end
-	if ammo.mag >= weapon.MagSize then return end
+	if ammo.mag >= w.MagSize then return end
 
 	ammo.isReloading = true
 	-- Notify client: reload started (reloadComplete = false)
-	ReloadState:FireClient(player, false, ammo.mag, key)
+	ReloadStateEvent:Fire(true, player, false, ammo.mag, key)
 
-	task.delay(getReloadTime(weapon.Type), function()
+	task.delay(getReloadTime(w.Type), function()
 		local currentMap = playerAmmo[player]
-		if not currentMap then return end  -- player left during reload
+		if not currentMap then return end   -- player left during reload
 		local current = currentMap[key]
 		if not current then return end
-		current.mag        = weapon.MagSize
+		current.mag         = w.MagSize
 		current.isReloading = false
 		-- Notify client: reload complete (reloadComplete = true)
-		ReloadState:FireClient(player, true, weapon.MagSize, key)
+		ReloadStateEvent:Fire(true, player, true, w.MagSize, key)
 	end)
 end
 
@@ -154,11 +162,8 @@ local npcFolder: Folder? = workspace:FindFirstChild("NPCs") :: Folder?
 local function isValidTarget(hitPart: BasePart): boolean
 	local character = hitPart:FindFirstAncestorOfClass("Model")
 	if not character then return false end
-
 	if Players:GetPlayerFromCharacter(character) then return true end
-
 	if npcFolder and character:IsDescendantOf(npcFolder) then return true end
-
 	return false
 end
 
@@ -166,8 +171,6 @@ local function getCharacterHumanoid(character: Model): Humanoid?
 	return character:FindFirstChildOfClass("Humanoid") :: Humanoid?
 end
 
--- Returns (damageDone, wasKilled).
--- Headshot multiplier is only applied for single-bullet weapons.
 local function applyDamage(
 	hitPart: BasePart,
 	baseDamage: number,
@@ -181,7 +184,7 @@ local function applyDamage(
 
 	local damage = baseDamage * bulletsPerShot
 
-	-- Headshot bonus only for single-bullet weapons (not shotguns)
+	-- Headshot bonus: single-bullet weapons only (not shotguns)
 	if hitPart.Name == "Head" and bulletsPerShot == 1 then
 		damage = math.floor(damage * HEADSHOT_MULTIPLIER)
 	end
@@ -191,17 +194,17 @@ local function applyDamage(
 end
 
 -- ============================================================
--- Damage Handler
+-- Damage Handler  (Warp — replaces WeaponFired.OnServerEvent)
 -- ============================================================
 
-WeaponFired.OnServerEvent:Connect(function(
+WeaponFiredEvent:Connect(function(
 	shooter: Player,
 	weaponKeyRaw: any,
 	hitPartRaw: any,
 	hitPositionRaw: any,
 	clientDistanceRaw: any
 )
-	-- ---- Type-guard client arguments ----
+	-- ── Type-guard client arguments ────────────────────────────────────────
 	local weaponKey: string = if typeof(weaponKeyRaw) == "string"
 		then weaponKeyRaw :: string
 		else ""
@@ -219,40 +222,40 @@ WeaponFired.OnServerEvent:Connect(function(
 		then clientDistanceRaw :: number
 		else math.huge
 
-	-- ---- Check 1: Valid weapon key ----
-	local weapon = WeaponData[weaponKey]
-	if not weapon then
+	-- ── Check 1: Valid weapon key ──────────────────────────────────────────
+	local w = WeaponData[weaponKey]
+	if not w then
 		warn(("[WeaponDamage] Unknown weaponKey '%s' from %s"):format(weaponKey, shooter.Name))
 		return
 	end
 
-	-- ---- Check 2: Rate limit ----
-	local now       = tick()
-	local fireMap   = lastFireTime[shooter]
+	-- ── Check 2: Rate limit ────────────────────────────────────────────────
+	local now     = tick()
+	local fireMap = lastFireTime[shooter]
 	if not fireMap then return end
 
-	local lastShot  = fireMap[weaponKey] or 0
-	if (now - lastShot) < weapon.FireRate then
+	local lastShot = fireMap[weaponKey] or 0
+	if (now - lastShot) < w.FireRate then
 		warn(("[WeaponDamage] Rate limit: %s fired %s too fast"):format(shooter.Name, weaponKey))
 		return
 	end
 
-	-- ---- Check 3: Shooter alive ----
+	-- ── Check 3: Shooter alive ─────────────────────────────────────────────
 	local shooterChar = shooter.Character
 	if not shooterChar then return end
 
 	local shooterHumanoid = getCharacterHumanoid(shooterChar)
 	if not shooterHumanoid or shooterHumanoid.Health <= 0 then return end
 
-	-- ---- Check 4: Client distance ----
-	local weaponMaxDist = getMaxDist(weapon.Type)
+	-- ── Check 4: Client distance ───────────────────────────────────────────
+	local weaponMaxDist = getMaxDist(w.Type)
 	if clientDistance > weaponMaxDist then
 		warn(("[WeaponDamage] Distance out of range for %s (%s): %.1f studs"):format(
 			shooter.Name, weaponKey, clientDistance))
 		return
 	end
 
-	-- ---- Check 5: Server ammo ----
+	-- ── Check 5: Server ammo ───────────────────────────────────────────────
 	local ammoMap = playerAmmo[shooter]
 	if not ammoMap then return end
 
@@ -261,7 +264,7 @@ WeaponFired.OnServerEvent:Connect(function(
 	if ammo.isReloading then return end
 	if ammo.mag <= 0 then return end
 
-	-- Consume ammo and stamp fire time BEFORE raycast so failed shots still cost ammo
+	-- Consume ammo and stamp fire time BEFORE raycast
 	fireMap[weaponKey] = now
 	ammo.mag -= 1
 
@@ -269,10 +272,10 @@ WeaponFired.OnServerEvent:Connect(function(
 		task.spawn(serverReload, shooter, weaponKey)
 	end
 
-	-- Miss: no hitPart supplied → ammo consumed, done
+	-- Miss: no hitPart — ammo consumed, done
 	if not hitPart then return end
 
-	-- ---- Check 6: Server-side LOS raycast ----
+	-- ── Check 6: Server-side LOS raycast ──────────────────────────────────
 	local hrp = shooterChar:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then return end
 
@@ -281,7 +284,7 @@ WeaponFired.OnServerEvent:Connect(function(
 	local serverDist = hitVec.Magnitude
 
 	if math.abs(serverDist - clientDistance) > DIST_MISMATCH_TOL then
-		warn(("[WeaponDamage] Distance mismatch: %s (client %.1f, server %.1f)"):format(
+		warn(("[WeaponDamage] Distance mismatch for %s (client %.1f, server %.1f)"):format(
 			shooter.Name, clientDistance, serverDist))
 		return
 	end
@@ -290,12 +293,7 @@ WeaponFired.OnServerEvent:Connect(function(
 	rayParams.FilterDescendantsInstances = { shooterChar }
 	rayParams.FilterType                 = Enum.RaycastFilterType.Exclude
 
-	local serverResult = workspace:Raycast(
-		eyePos,
-		hitVec.Unit * weaponMaxDist,
-		rayParams
-	)
-
+	local serverResult = workspace:Raycast(eyePos, hitVec.Unit * weaponMaxDist, rayParams)
 	if not serverResult then
 		warn(("[WeaponDamage] Server LOS blocked for %s"):format(shooter.Name))
 		return
@@ -308,29 +306,27 @@ WeaponFired.OnServerEvent:Connect(function(
 		return
 	end
 
-	-- ---- Check 7: Valid target ----
+	-- ── Check 7: Valid target ──────────────────────────────────────────────
 	if not isValidTarget(hitPart) then
 		warn(("[WeaponDamage] Invalid target from %s: %s"):format(
 			shooter.Name, hitPart:GetFullName()))
 		return
 	end
 
-	-- ---- All checks passed → apply damage ----
-	local isHeadshot         = hitPart.Name == "Head"
-	local damage, killed     = applyDamage(hitPart, weapon.Damage, weapon.BulletsPerShot)
-
+	-- ── All checks passed → apply damage ──────────────────────────────────
+	local isHeadshot       = hitPart.Name == "Head"
+	local damage, killed   = applyDamage(hitPart, w.Damage, w.BulletsPerShot)
 	if damage <= 0 then return end
 
-	-- Notify shooter: hit confirmed (drives hit-marker)
-	HitConfirmed:FireClient(shooter, damage, isHeadshot)
+	-- Notify shooter: hit confirmed (drives hit-marker on client)
+	HitConfirmedEvent:Fire(true, shooter, damage, isHeadshot)
 
 	if not killed then return end
 
-	-- ---- Kill processing ----
+	-- ── Kill processing ────────────────────────────────────────────────────
 	local hitCharacter = hitPart:FindFirstAncestorOfClass("Model")
 	local victimName   = if hitCharacter then hitCharacter.Name else "Unknown"
 
-	-- Killer Kills counter
 	local killerStats = shooter:FindFirstChild("leaderstats")
 	if killerStats then
 		local killsVal = killerStats:FindFirstChild("Kills")
@@ -339,7 +335,6 @@ WeaponFired.OnServerEvent:Connect(function(
 		end
 	end
 
-	-- Victim Deaths counter (players only)
 	if hitCharacter then
 		local victim = Players:GetPlayerFromCharacter(hitCharacter)
 		if victim then
@@ -355,7 +350,7 @@ WeaponFired.OnServerEvent:Connect(function(
 	end
 
 	-- Broadcast kill to all clients (kill feed UI)
-	KillFeed:FireAllClients(shooter.Name, victimName)
+	KillFeedEvent:Fires(true, shooter.Name, victimName)
 
 	-- Notify server-side round manager
 	KillRegistered:Fire(shooter.Name, victimName)

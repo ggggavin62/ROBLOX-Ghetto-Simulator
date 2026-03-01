@@ -3,9 +3,10 @@
 	WeaponHandler.client.luau
 	Full FPS weapon client — input, ammo, firing, scope, HUD.
 
-	Modules required:
-	  SoundFX  (StarterPlayerScripts/SoundFX) — fire / reload / empty sounds
-	  VisualFX (StarterPlayerScripts/VisualFX) — muzzle flash, impact, scope
+	Libraries integrated:
+	  FastCast  (src/shared/FastCast.luau)       — physics-simulated bullet tracers
+	  Warp      (Packages/Warp)                  — high-performance batched networking
+	  HUDState  (StarterPlayerScripts/HUDState)  — Fusion reactive HUD state
 
 	FireMode behaviour:
 	  Auto  — fires on every Heartbeat tick while MouseButton1 is held
@@ -14,11 +15,9 @@
 	Scope (Sniper-type weapons only):
 	  MouseButton2 down → scopeIn (FOV 70 → 20, scope overlay)
 	  MouseButton2 up   → scopeOut (FOV 20 → 70)
-	  Switching away from a sniper while scoped auto-cancels scope.
 
 	Weapon pickups:
-	  WeaponPickup RemoteEvent (server → client) delivers (weaponKey, slot).
-	  Client replaces LOADOUT[slot] and initialises ammo for the new weapon.
+	  WeaponPickup (Warp event, server → client) delivers (weaponKey, slot).
 
 	Security: NO damage is ever applied here. WeaponDamage.server.luau
 	performs all 7 validation checks before any health change.
@@ -38,7 +37,7 @@ weaponSwitched.Name       = "WeaponSwitched"
 weaponSwitched.Parent     = LocalPlayer
 
 -- ============================================================
--- Weapon type (re-declared locally for strict-mode compat)
+-- Shared modules
 -- ============================================================
 
 type Weapon = {
@@ -47,15 +46,12 @@ type Weapon = {
 	FireMode: string, BulletsPerShot: number,
 }
 
--- ============================================================
--- Shared module
--- ============================================================
-
 local sharedFolder = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData   = require(sharedFolder:WaitForChild("WeaponData")) :: { [string]: Weapon }
+local FastCast: any = require(sharedFolder:WaitForChild("FastCast"))
 
 -- ============================================================
--- Client modules (ModuleScripts in same StarterPlayerScripts folder)
+-- Client modules
 -- ============================================================
 
 type SoundFXType = {
@@ -74,15 +70,16 @@ type VisualFXType = {
 
 local SoundFX  = require(script.Parent:WaitForChild("SoundFX"))  :: SoundFXType
 local VisualFX = require(script.Parent:WaitForChild("VisualFX")) :: VisualFXType
+local HUDState = require(script.Parent:WaitForChild("HUDState"))
 
 -- ============================================================
--- Remote Events
+-- Warp networking
 -- ============================================================
 
-local eventsFolder = ReplicatedStorage:WaitForChild("Events")
-local WeaponFired  = eventsFolder:WaitForChild("WeaponFired")  :: RemoteEvent
-local ReloadState  = eventsFolder:WaitForChild("ReloadState")  :: RemoteEvent
-local WeaponPickup = eventsFolder:WaitForChild("WeaponPickup") :: RemoteEvent
+local Warp: any         = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Warp"))
+local WeaponFiredEvent  = Warp.Client("WeaponFired")
+local ReloadStateEvent  = Warp.Client("ReloadState")
+local WeaponPickupEvent = Warp.Client("WeaponPickup")
 
 -- ============================================================
 -- Constants
@@ -104,8 +101,106 @@ local RELOAD_TIME_BY_TYPE: { [string]: number } = {
 	Sniper  = 3.5,
 }
 
+-- Bullet travel speed (studs/s) per weapon type
+local BULLET_SPEED: { [string]: number } = {
+	Pistol  = 200,
+	SMG     = 250,
+	Shotgun = 180,
+	Rifle   = 400,
+	Sniper  = 800,
+}
+
+-- Fraction of workspace.Gravity applied as bullet drop
+local BULLET_GRAVITY_SCALE: { [string]: number } = {
+	Pistol  = 0.05,
+	SMG     = 0.03,
+	Shotgun = 0.08,
+	Rifle   = 0.02,
+	Sniper  = 0.01,
+}
+
 -- Slot 1 = Primary rifle, Slot 2 = Secondary pistol
 local LOADOUT: { string } = { "AK47", "Glock19" }
+
+-- ============================================================
+-- FastCast Setup
+-- ============================================================
+
+-- Thin neon tracer Part (cloned per bullet by FastCast)
+local TRACER_TEMPLATE           = Instance.new("Part")
+TRACER_TEMPLATE.Name            = "Tracer"
+TRACER_TEMPLATE.Size            = Vector3.new(0.05, 0.05, 1)
+TRACER_TEMPLATE.Material        = Enum.Material.Neon
+TRACER_TEMPLATE.Color           = Color3.fromRGB(255, 240, 120)
+TRACER_TEMPLATE.CastShadow      = false
+TRACER_TEMPLATE.CanCollide      = false
+TRACER_TEMPLATE.Anchored        = true
+
+local caster: any = FastCast.new()
+
+-- Behaviors are rebuilt on each character spawn to exclude the fresh character
+local activeBehaviors: { [string]: any } = {}
+
+local function rebuildBehaviors(character: Model)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterDescendantsInstances = { character }
+	rayParams.FilterType                 = Enum.RaycastFilterType.Exclude
+
+	for wepType, maxDist in MAX_DIST_BY_TYPE do
+		local b = FastCast.newBehavior()
+		b.RaycastParams           = rayParams
+		b.MaxDistance             = maxDist
+		b.Acceleration            = Vector3.new(
+			0,
+			-workspace.Gravity * (BULLET_GRAVITY_SCALE[wepType] or 0.05),
+			0
+		)
+		b.CosmeticBulletTemplate  = TRACER_TEMPLATE
+		b.CosmeticBulletContainer = workspace.Terrain
+		activeBehaviors[wepType]  = b
+	end
+end
+
+-- ── LengthChanged: stretch tracer Part to match bullet segment ─────────────
+caster.LengthChanged:Connect(function(
+	_cast: any,
+	lastPoint: Vector3,
+	rayDir: Vector3,
+	length: number,
+	_vel: Vector3,
+	tracerPart: BasePart?
+)
+	if not tracerPart then return end
+	local safeLen = math.max(length, 0.01)
+	tracerPart.Size  = Vector3.new(0.05, 0.05, safeLen)
+	tracerPart.CFrame = CFrame.new(
+		lastPoint + rayDir * (safeLen * 0.5),
+		lastPoint + rayDir * safeLen
+	)
+end)
+
+-- ── RayHit: bullet struck something — notify server + show impact VFX ──────
+caster.RayHit:Connect(function(
+	cast: any,
+	result: RaycastResult,
+	_vel: Vector3,
+	_tracerPart: BasePart?
+)
+	cast.UserData.hitDetected = true
+	local key = (cast.UserData.weaponKey or "") :: string
+	VisualFX.showImpact(result.Position)
+	WeaponFiredEvent:Fire(true, key, result.Instance, result.Position, result.Distance)
+end)
+
+-- ── CastTerminating: fired for both hits AND misses.
+--   Hits are already handled by RayHit; only send a miss if no hit occurred.
+caster.CastTerminating:Connect(function(cast: any)
+	if cast.UserData.hitDetected then return end
+	local key = (cast.UserData.weaponKey or "") :: string
+	if key == "" then return end
+	-- Send miss to server so server-side ammo is consumed
+	WeaponFiredEvent:Fire(true, key, nil, Camera.CFrame.Position, 0)
+end)
 
 -- ============================================================
 -- State
@@ -139,10 +234,6 @@ local function weaponKey(): string
 	return LOADOUT[currentSlot]
 end
 
-local function maxDist(): number
-	return MAX_DIST_BY_TYPE[weapon().Type] or 150
-end
-
 local function reloadTime(): number
 	return RELOAD_TIME_BY_TYPE[weapon().Type] or 2.0
 end
@@ -153,17 +244,12 @@ local function isSingleShot(): boolean
 end
 
 -- ============================================================
--- HUD References  (elements created by HUDController.client.luau)
+-- HUD References  (only mainHUD and crosshair — labels are now Fusion-reactive)
 -- ============================================================
--- WaitForChild blocks until HUDController has finished building MainHUD.
 
-local playerGui       = LocalPlayer:WaitForChild("PlayerGui")
-local mainHUD         = playerGui:WaitForChild("MainHUD") :: ScreenGui
-local crosshair          = mainHUD:WaitForChild("Crosshair")          :: Frame
-local weaponNameLabel    = mainHUD:WaitForChild("WeaponNameLabel")    :: TextLabel
-local ammoLabel          = mainHUD:WaitForChild("AmmoLabel")          :: TextLabel
-local slotLabel          = mainHUD:WaitForChild("SlotLabel")          :: TextLabel
-local weaponCentreLabel  = mainHUD:WaitForChild("WeaponCentreLabel")  :: TextLabel
+local playerGui  = LocalPlayer:WaitForChild("PlayerGui")
+local mainHUD    = playerGui:WaitForChild("MainHUD") :: ScreenGui
+local crosshair  = mainHUD:WaitForChild("Crosshair") :: Frame
 
 -- ============================================================
 -- Module Initialisation
@@ -173,7 +259,7 @@ VisualFX.initMuzzleFlash(mainHUD)
 VisualFX.initScope()
 
 -- ============================================================
--- HUD Update
+-- HUD Update — writes Fusion state; HUDController reacts automatically
 -- ============================================================
 
 local function buildSlotLine(): string
@@ -192,20 +278,11 @@ local function updateAmmoUI()
 	local key = weaponKey()
 	local w   = weapon()
 
-	weaponNameLabel.Text    = w.Name
-	weaponCentreLabel.Text  = w.Name
-	slotLabel.Text          = buildSlotLine()
-
-	if isReloading[key] then
-		ammoLabel.Text       = "RELOADING..."
-		ammoLabel.TextColor3 = Color3.fromRGB(200, 175, 60)
-	else
-		local mag = localAmmo[key] or 0
-		ammoLabel.Text = tostring(mag) .. " / " .. tostring(w.MagSize)
-		ammoLabel.TextColor3 = if mag <= math.floor(w.MagSize * 0.25)
-			then Color3.fromRGB(220, 70, 70)
-			else Color3.new(1, 1, 1)
-	end
+	HUDState.weaponName:set(w.Name)
+	HUDState.slotLine:set(buildSlotLine())
+	HUDState.ammo:set(localAmmo[key] or 0)
+	HUDState.magSize:set(w.MagSize)
+	HUDState.isReloading:set(isReloading[key] or false)
 end
 
 -- ============================================================
@@ -274,7 +351,7 @@ local function applySpread(baseDir: Vector3, spreadDeg: number): Vector3
 end
 
 -- ============================================================
--- Firing
+-- Firing — FastCast-based
 -- ============================================================
 
 local function tryFire()
@@ -289,7 +366,7 @@ local function tryFire()
 	end
 
 	if not canFire[key] then return end
-	if isReloading[key] then return end
+	if isReloading[key]  then return end
 
 	local character = LocalPlayer.Character
 	if not character then return end
@@ -305,49 +382,19 @@ local function tryFire()
 	SoundFX.playFire(key)
 	VisualFX.showMuzzleFlash()
 
-	local rayParams = RaycastParams.new()
-	rayParams.FilterDescendantsInstances = { character }
-	rayParams.FilterType                 = Enum.RaycastFilterType.Exclude
+	local origin  = Camera.CFrame.Position
+	local look    = Camera.CFrame.LookVector
+	local wType   = w.Type
+	local behavior = activeBehaviors[wType] or activeBehaviors["Rifle"] or FastCast.newBehavior()
+	local speed    = BULLET_SPEED[wType] or 300
 
-	local origin   = Camera.CFrame.Position
-	local baseLook = Camera.CFrame.LookVector
-	local dist     = maxDist()
-
-	local npcFolder = workspace:FindFirstChild("NPCs")
-
-	local bestPart: BasePart? = nil
-	local bestPos: Vector3    = origin + baseLook * dist
-	local bestDist: number    = dist + 1
-
+	-- Fire one FastCast per pellet (shotgun fires BulletsPerShot pellets)
 	for _ = 1, w.BulletsPerShot do
-		local dir    = applySpread(baseLook, w.Spread) * dist
-		local result = workspace:Raycast(origin, dir, rayParams)
-
-		if result then
-			local hitInst = result.Instance :: BasePart
-			local hitChar = hitInst:FindFirstAncestorOfClass("Model")
-			local isChar  = hitChar ~= nil and (
-				game:GetService("Players"):GetPlayerFromCharacter(hitChar) ~= nil
-				or (npcFolder ~= nil and hitChar:IsDescendantOf(npcFolder :: Instance))
-			)
-
-			if isChar and result.Distance < bestDist then
-				bestPart  = hitInst
-				bestPos   = result.Position
-				bestDist  = result.Distance
-			elseif bestPart == nil then
-				bestPart  = hitInst
-				bestPos   = result.Position
-				bestDist  = result.Distance
-			end
-		end
-	end
-
-	if bestPart then
-		VisualFX.showImpact(bestPos)
-		WeaponFired:FireServer(key, bestPart, bestPos, bestDist)
-	else
-		WeaponFired:FireServer(key, nil, origin + baseLook * dist, dist)
+		local dir  = applySpread(look, w.Spread)
+		local cast = caster:Fire(origin, dir, speed, behavior)
+		-- Attach per-shot metadata; RayHit/CastTerminating handlers read these
+		cast.UserData.weaponKey    = key
+		cast.UserData.hitDetected  = false
 	end
 
 	if (localAmmo[key] or 0) <= 0 then
@@ -366,10 +413,11 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- Server → Client Sync
+-- Server → Client Sync  (Warp per-event objects)
 -- ============================================================
 
-ReloadState.OnClientEvent:Connect(function(
+-- Server notifies of reload state changes
+ReloadStateEvent:Connect(function(
 	reloadCompleteRaw: any,
 	newMagRaw: any,
 	syncKeyRaw: any
@@ -395,7 +443,8 @@ ReloadState.OnClientEvent:Connect(function(
 	updateAmmoUI()
 end)
 
-WeaponPickup.OnClientEvent:Connect(function(pickupKeyRaw: any, slotRaw: any)
+-- Server grants a new weapon (pickup / round start)
+WeaponPickupEvent:Connect(function(pickupKeyRaw: any, slotRaw: any)
 	local pickupKey: string = if typeof(pickupKeyRaw) == "string"
 		then pickupKeyRaw :: string
 		else ""
@@ -480,6 +529,9 @@ local function onCharacterAdded(character: Model)
 		VisualFX.scopeOut(crosshair)
 	end
 
+	-- Rebuild FastCast behaviors with fresh character exclusion filter
+	rebuildBehaviors(character)
+
 	for _, key in LOADOUT do
 		local w = WeaponData[key]
 		if w then
@@ -492,7 +544,6 @@ local function onCharacterAdded(character: Model)
 	currentSlot = 1
 	updateAmmoUI()
 	weaponSwitched:Fire(weaponKey())
-	-- Health bar is updated by HUDController.client.luau
 end
 
 -- ============================================================

@@ -16,6 +16,9 @@
 
 local Players            = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+
+local SimplePath: any = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("SimplePath"))
 
 -- ============================================================
 -- Constants
@@ -321,23 +324,7 @@ local function npcShoot(npcModel: Model, hrp: BasePart, targetHRP: BasePart)
 	end
 end
 
-local function moveNPCToPosition(npcModel: Model, humanoid: Humanoid, hrp: BasePart, targetPos: Vector3)
-	local path = PathfindingService:CreatePath(AGENT_PARAMS)
-	local ok   = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
-
-	if not ok or path.Status ~= Enum.PathStatus.Success then
-		humanoid:MoveTo(targetPos)
-		task.wait(8)
-		return
-	end
-
-	for _, waypoint in path:GetWaypoints() do
-		if npcModel.Parent == nil or humanoid.Health <= 0 then break end
-		if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
-		humanoid:MoveTo(waypoint.Position)
-		humanoid.MoveToFinished:Wait()
-	end
-end
+-- moveNPCToPosition removed — SimplePath handles stuck detection and continuous re-pathing.
 
 -- ============================================================
 -- NPC Animations  (R15 Walk / Idle, server-loaded)
@@ -383,20 +370,46 @@ end
 -- Main NPC AI Loop
 -- ============================================================
 
-local function runNPCLoop(npcModel: Model)
+local function runNPCLoop(npcModel: Model, path: any)
 	local humanoid = npcModel:FindFirstChildOfClass("Humanoid") :: Humanoid?
 	local hrp      = npcModel.PrimaryPart
 	if not humanoid or not hrp then return end
 
 	while npcModel.Parent ~= nil and humanoid.Health > 0 do
 		local _, targetHRP = findNearestVisiblePlayer(npcModel, hrp)
+
 		if targetHRP then
+			-- Combat mode: stop SimplePath so it doesn't fight MoveTo
+			path:Stop()
 			humanoid:MoveTo(targetHRP.Position)
 			npcShoot(npcModel, hrp, targetHRP)
 			task.wait(NPC_AI_TICK)
 		else
-			moveNPCToPosition(npcModel, humanoid, hrp, getRandomPatrolWaypoint())
+			-- Patrol mode: SimplePath computes + walks; handles stuck recovery automatically
+			local arrived   = false
+			local reachConn = path.Reached:Connect(function()
+				arrived = true
+			end)
+			local errConn = path.Error:Connect(function(_errType: any)
+				arrived = true  -- treat errors as "done" so the loop advances
+			end)
+
+			path:Run(getRandomPatrolWaypoint())
+
+			-- Yield until arrival, error, death, or 12-second timeout
+			local deadline = tick() + 12
+			while not arrived
+				and npcModel.Parent ~= nil
+				and humanoid.Health > 0
+				and tick() < deadline
+			do
+				task.wait(NPC_AI_TICK)
+			end
+
+			reachConn:Disconnect()
+			errConn:Disconnect()
 		end
+
 		task.wait(0)
 	end
 end
@@ -421,15 +434,19 @@ local function spawnNPCsToFill()
 		local humanoid = model:FindFirstChildOfClass("Humanoid") :: Humanoid
 		npcShootCooldowns[model] = 0
 
+		-- One SimplePath per NPC — provides stuck detection + continuous re-pathing
+		local path = SimplePath.new(model, AGENT_PARAMS)
+
 		humanoid.Died:Connect(function()
 			npcShootCooldowns[model] = nil
+			path:Destroy()
 			task.delay(RESPAWN_DELAY, function()
 				if model.Parent then model:Destroy() end
 				spawnNPCsToFill()
 			end)
 		end)
 
-		task.spawn(runNPCLoop, model)
+		task.spawn(runNPCLoop, model, path)
 		task.spawn(setupNPCAnimations, model)
 	end
 end

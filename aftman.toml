@@ -2,4 +2,5 @@
 # https://github.com/LPGhatguy/aftman
 
 [tools]
-rojo = "rojo-rbx/rojo@7.4.4"
+rojo  = "rojo-rbx/rojo@7.4.4"
+wally = "upliftgames/wally@0.3.2"

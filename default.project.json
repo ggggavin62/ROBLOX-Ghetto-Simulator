@@ -27,6 +27,9 @@
 
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
+      "Packages": {
+        "$path": "Packages"
+      },
       "Shared": {
         "$className": "Folder",
         "$path": "src/shared"
