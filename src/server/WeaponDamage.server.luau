@@ -37,17 +37,17 @@ local sharedFolder = ReplicatedStorage:WaitForChild("Shared")
 local WeaponData   = require(sharedFolder:WaitForChild("WeaponData")) :: { [string]: Weapon }
 
 -- ============================================================
--- Warp Networking
+-- Warp Networking  (centralised via WarpEvents module)
 -- ============================================================
 
-local Warp: any = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Warp"))
-
--- One event object per identifier  (Warp v1.0.14 API)
-local WeaponFiredEvent   = Warp.Server("WeaponFired")
-local ReloadStateEvent   = Warp.Server("ReloadState")
-local HitConfirmedEvent  = Warp.Server("HitConfirmed")
-local KillFeedEvent      = Warp.Server("KillFeed")
-local _WeaponPickupEvent = Warp.Server("WeaponPickup")  -- declared so client identifier sync works
+-- WarpEvents registers ALL identifiers in the correct order in one place.
+-- Lua module caching ensures Warp.Server("X") is called exactly once per ID.
+local WarpEvents        = require(ServerScriptService:WaitForChild("WarpEvents"))
+local WeaponFiredEvent  = WarpEvents.WeaponFired
+local ReloadStateEvent  = WarpEvents.ReloadState
+local HitConfirmedEvent = WarpEvents.HitConfirmed
+local KillFeedEvent     = WarpEvents.KillFeed
+-- WeaponPickup is fired from WeaponPickups.server.luau via the same WarpEvents module
 
 -- ============================================================
 -- Constants

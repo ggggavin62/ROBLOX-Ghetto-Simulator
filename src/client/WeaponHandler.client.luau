@@ -76,10 +76,11 @@ local HUDState = require(script.Parent:WaitForChild("HUDState"))
 -- Warp networking
 -- ============================================================
 
-local Warp: any         = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Warp"))
-local WeaponFiredEvent  = Warp.Client("WeaponFired")
-local ReloadStateEvent  = Warp.Client("ReloadState")
-local WeaponPickupEvent = Warp.Client("WeaponPickup")
+-- Centralised Warp event objects (identical identifier order to server WarpEvents.luau)
+local WarpEvents        = require(script.Parent:WaitForChild("WarpEvents"))
+local WeaponFiredEvent  = WarpEvents.WeaponFired
+local ReloadStateEvent  = WarpEvents.ReloadState
+local WeaponPickupEvent = WarpEvents.WeaponPickup
 
 -- ============================================================
 -- Constants

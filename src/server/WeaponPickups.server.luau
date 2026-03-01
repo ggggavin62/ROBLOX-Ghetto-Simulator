@@ -14,18 +14,19 @@
 	  3. The pickup disappears for 30 s then respawns.
 ]]
 
-local Players          = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace        = game:GetService("Workspace")
+local Players             = game:GetService("Players")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local Workspace           = game:GetService("Workspace")
 
 local WeaponData = require(
 	ReplicatedStorage:WaitForChild("Shared"):WaitForChild("WeaponData")
 ) :: { [string]: { Name: string, Type: string, Damage: number, FireRate: number,
 	MagSize: number, Spread: number, Recoil: number, FireMode: string, BulletsPerShot: number } }
 
-local WeaponPickup: RemoteEvent = ReplicatedStorage
-	:WaitForChild("Events")
-	:WaitForChild("WeaponPickup") :: RemoteEvent
+-- Centralised Warp events (all identifiers registered in WarpEvents.luau)
+local WarpEvents        = require(ServerScriptService:WaitForChild("WarpEvents"))
+local WeaponPickupEvent = WarpEvents.WeaponPickup
 
 -- ============================================================
 -- Constants
@@ -169,8 +170,8 @@ local function onPromptTriggered(part: BasePart, weaponKey: string, player: Play
 	local character = player.Character
 	if not character then return end
 
-	-- Slot 1 = primary; fire pickup event to client
-	WeaponPickup:FireClient(player, weaponKey, 1)
+	-- Slot 1 = primary; fire pickup event to client via Warp
+	WeaponPickupEvent:Fire(true, player, weaponKey, 1)
 
 	-- Hide pickup; respawn after delay
 	hidePickup(part)

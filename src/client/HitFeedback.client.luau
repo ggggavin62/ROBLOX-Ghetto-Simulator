@@ -12,19 +12,18 @@
 	                  live countdown, cleared the moment the character respawns.
 ]]
 
-local Players           = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService      = game:GetService("TweenService")
+local Players      = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================================
--- Remote Events
+-- Warp Events  (centralised via WarpEvents module)
 -- ============================================================
 
-local eventsFolder = ReplicatedStorage:WaitForChild("Events")
-local HitConfirmed = eventsFolder:WaitForChild("HitConfirmed") :: RemoteEvent
-local KillFeed     = eventsFolder:WaitForChild("KillFeed")     :: RemoteEvent
+local WarpEvents   = require(script.Parent:WaitForChild("WarpEvents"))
+local HitConfirmed = WarpEvents.HitConfirmed
+local KillFeed     = WarpEvents.KillFeed
 
 -- ============================================================
 -- Constants
@@ -257,13 +256,13 @@ LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
 -- Remote Event Handlers
 -- ============================================================
 
-HitConfirmed.OnClientEvent:Connect(function(damageRaw: any, isHeadshotRaw: any)
+HitConfirmed:Connect(function(damageRaw: any, isHeadshotRaw: any)
 	local _damage: number     = if typeof(damageRaw) == "number" then damageRaw :: number else 0
 	local isHeadshot: boolean = if typeof(isHeadshotRaw) == "boolean" then isHeadshotRaw :: boolean else false
 	flashHitMarker(isHeadshot)
 end)
 
-KillFeed.OnClientEvent:Connect(function(killerNameRaw: any, victimNameRaw: any)
+KillFeed:Connect(function(killerNameRaw: any, victimNameRaw: any)
 	local killerName: string = if typeof(killerNameRaw) == "string" then killerNameRaw :: string else "?"
 	local victimName: string = if typeof(victimNameRaw) == "string" then victimNameRaw :: string else "?"
 	addKillFeedEntry(killerName, victimName)

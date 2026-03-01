@@ -2,22 +2,19 @@
 --[[
 	ViewmodelController.client.luau  (LocalScript — StarterPlayerScripts)
 
-	Renders a physical first-person gun model parented to the camera.
+	Renders a first-person weapon model parented to the camera.
 
-	Listens for the "WeaponSwitched" BindableEvent (created + fired by
-	WeaponHandler) and rebuilds the Part assembly to match the current
-	weapon type.
+	Model source priority:
+	  1. ReplicatedStorage/Weapons/[weaponKey]  — real 3-D model uploaded from Blender
+	  2. Primitive fallback                      — programmatic box gun (as before)
 
-	The assembly is parented to workspace.CurrentCamera so it renders
-	in front of world geometry and never depth-fights terrain/walls.
+	On WeaponSwitched (BindableEvent from WeaponHandler):
+	  • Previous model is destroyed
+	  • New model is cloned from ReplicatedStorage/Weapons/[key], stripped of
+	    collision/shadow, parented to Camera, and pinned each RenderStepped.
 
-	Gun shapes:
-	  Handle  — gun body (PrimaryPart, positioned each RenderStepped)
-	  Barrel  — welded to Handle, extends forward
-	  Grip    — welded to Handle, angled downward at rear
-
-	Weapon type → GUN_SPECS → body/barrel/grip dimensions + colour.
-	Weapon type → GUN_OFFSETS → camera-relative CFrame offset.
+	On CharacterAdded:
+	  • Viewmodel is cleared; rebuilt once WeaponHandler fires WeaponSwitched.
 ]]
 
 local Players           = game:GetService("Players")
@@ -42,6 +39,13 @@ type WeaponEntry = {
 local WeaponConfig = require(sharedFolder:WaitForChild("WeaponData")) :: { [string]: WeaponEntry }
 
 -- ============================================================
+-- Weapon model folder (real 3-D assets uploaded from Blender)
+-- ============================================================
+
+-- WaitForChild with a timeout — returns nil if the folder was never placed.
+local weaponsFolder: Folder? = ReplicatedStorage:WaitForChild("Weapons", 5) :: Folder?
+
+-- ============================================================
 -- Cross-script channel — WeaponHandler fires when weapon changes
 -- ============================================================
 
@@ -60,7 +64,7 @@ local GUN_OFFSETS: { [string]: CFrame } = {
 }
 
 -- ============================================================
--- Gun appearance per weapon type
+-- Primitive fallback gun appearance
 -- ============================================================
 
 type GunSpec = {
@@ -105,7 +109,7 @@ local currentModel:      Model? = nil
 local currentWeaponType: string = "Rifle"
 
 -- ============================================================
--- Model builder
+-- Helpers
 -- ============================================================
 
 local function destroyModel()
@@ -115,12 +119,68 @@ local function destroyModel()
 	end
 end
 
-local function buildGunModel(weaponType: string): Model
+-- Strip physics and rendering properties that would interfere with viewmodel.
+-- Also removes any scripts that might try to run inside the cloned model.
+local function prepareModelParts(model: Model)
+	local toDestroy: { Instance } = {}
+	for _, desc in model:GetDescendants() do
+		if desc:IsA("BasePart") then
+			local part        = desc :: BasePart
+			part.CanCollide   = false
+			part.CastShadow   = false
+			part.Anchored     = false
+		elseif desc:IsA("Script") or desc:IsA("LocalScript") then
+			table.insert(toDestroy, desc)
+		end
+	end
+	for _, s in toDestroy do s:Destroy() end
+end
+
+-- Find the best candidate for PrimaryPart.
+-- Roblox tools conventionally use a "Handle" part.
+local function findHandle(model: Model): BasePart?
+	local handle = model:FindFirstChild("Handle") :: BasePart?
+	if handle and handle:IsA("BasePart") then return handle end
+	if model.PrimaryPart then return model.PrimaryPart end
+	return model:FindFirstChildOfClass("BasePart") :: BasePart?
+end
+
+-- ============================================================
+-- Model builders
+-- ============================================================
+
+-- Attempt to clone a real 3-D model from ReplicatedStorage/Weapons/[weaponKey].
+-- Returns the cloned Model on success, nil on failure.
+local function loadWeaponModel(weaponKey: string): Model?
+	if not weaponsFolder then return nil end
+
+	local template = weaponsFolder:FindFirstChild(weaponKey)
+	if not template or not template:IsA("Model") then return nil end
+
+	local model = (template :: Model):Clone()
+	model.Name  = "Viewmodel_Gun"
+
+	prepareModelParts(model)
+
+	local handle = findHandle(model)
+	if handle then
+		model.PrimaryPart = handle
+	elseif not model.PrimaryPart then
+		-- No usable BasePart found; discard and fall back
+		model:Destroy()
+		return nil
+	end
+
+	model.Parent = Camera
+	return model
+end
+
+-- Fallback: build a simple box-gun from primitive Parts.
+local function buildPrimitiveModel(weaponType: string): Model
 	local spec  = GUN_SPECS[weaponType] or GUN_SPECS["Rifle"] :: GunSpec
 	local model = Instance.new("Model")
 	model.Name  = "Viewmodel_Gun"
 
-	-- ── Body (PrimaryPart / Handle) ─────────────────────────
 	local body           = Instance.new("Part")
 	body.Name            = "Handle"
 	body.Size            = spec.bodySize
@@ -131,7 +191,6 @@ local function buildGunModel(weaponType: string): Model
 	body.Anchored        = false
 	body.Parent          = model
 
-	-- ── Barrel ──────────────────────────────────────────────
 	local barrel         = Instance.new("Part")
 	barrel.Name          = "Barrel"
 	barrel.Size          = spec.barrelSize
@@ -151,7 +210,6 @@ local function buildGunModel(weaponType: string): Model
 	)
 	barrelWeld.Parent    = body
 
-	-- ── Grip ────────────────────────────────────────────────
 	local gripH          = spec.bodySize.Y * 0.9
 	local gripD          = spec.bodySize.Z * 0.28
 
@@ -168,7 +226,6 @@ local function buildGunModel(weaponType: string): Model
 	local gripWeld       = Instance.new("Weld")
 	gripWeld.Part0       = body
 	gripWeld.Part1       = grip
-	-- Hang grip below and slightly rearward of body centre
 	gripWeld.C0          = CFrame.new(
 		0,
 		-(spec.bodySize.Y * 0.5 + gripH * 0.35),
@@ -178,7 +235,6 @@ local function buildGunModel(weaponType: string): Model
 
 	model.PrimaryPart    = body
 	model.Parent         = Camera
-
 	return model
 end
 
@@ -196,7 +252,10 @@ local function onWeaponSwitched(weaponKeyRaw: any)
 
 	currentWeaponType = weaponType
 	destroyModel()
-	currentModel = buildGunModel(weaponType)
+
+	-- Prefer the real 3-D model; fall back to primitives if it doesn't exist.
+	local loaded = loadWeaponModel(weaponKey)
+	currentModel = if loaded then loaded else buildPrimitiveModel(weaponType)
 end
 
 weaponSwitched.Event:Connect(onWeaponSwitched)
