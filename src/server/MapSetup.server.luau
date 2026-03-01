@@ -62,7 +62,7 @@ local DOOR_HW     : number = 2.5      -- half-width of doorway opening (5 studs 
 local DOOR_H      : number = 9        -- doorway clear height (R15 ~= 5.6 studs, 9 is generous)
 local FLOOR_STEP  : number = 12       -- floor-to-floor height
 local STAIR_GAP_X : number = 6        -- stairwell hole width  in X (covers ramp + player clearance)
-local STAIR_GAP_Z : number = 8        -- stairwell hole depth  in Z (covers stair top exit)
+local LANDING_D   : number = 6.0      -- flat landing depth past the top stair step (studs)
 local STAIR_STEP_RISE : number = 1.0  -- height of each individual step (studs)
 local STAIR_STEP_RUN  : number = 1.5  -- depth  of each individual step (studs)
 
@@ -365,12 +365,22 @@ local function GenerateBuilding(
 	-- 3-part floor slabs
 	for fl = 1, floors - 1 do
 		local slabY     : number = fl * FLOOR_STEP + 0.4
-		local flightIdx : number = fl - 1   -- 0-based index of the flight below this slab
-		local topZ      : number = if flightIdx % 2 == 0
-			then  iD / 2 - totalReach          -- even flight: top step near north of flight
-			else -(iD / 2 - totalReach)        -- odd  flight: top step near south of flight
-		local gapZMin : number = topZ - STAIR_GAP_Z / 2
-		local gapZMax : number = topZ + STAIR_GAP_Z / 2
+		local flightIdx : number = fl - 1
+		-- gapStart: distance from the starting wall where the gap opens.
+		-- R15 avatar (~5.6 studs tall) hits the slab at step 6 (feet Y = 6 studs, head = 11.6 > 12).
+		local gapStart : number = 6 * STAIR_STEP_RUN                           -- = 9.0 studs
+		-- gapEnd: past the top step's far edge + flat landing.
+		local gapEnd   : number = totalReach + STAIR_STEP_RUN / 2 + LANDING_D  -- = 24.0 studs
+		-- Convert distances-from-wall to building-local Z coordinates.
+		local gapZMin : number
+		local gapZMax : number
+		if flightIdx % 2 == 0 then   -- even flight: south→north (starts at +iD/2)
+			gapZMax =  iD / 2 - gapStart   -- south edge of gap
+			gapZMin =  iD / 2 - gapEnd     -- north edge (landing side)
+		else                         -- odd  flight: north→south (starts at -iD/2)
+			gapZMin = -iD / 2 + gapStart   -- north edge of gap
+			gapZMax = -iD / 2 + gapEnd     -- south edge (landing side)
+		end
 
 		-- 1. West slab: x ∈ [-iW/2, iW/2 - STAIR_GAP_X], full interior depth
 		local westW : number = iW - STAIR_GAP_X
