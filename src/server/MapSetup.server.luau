@@ -349,12 +349,12 @@ local function GenerateBuilding(
 	--   2. South piece — inside the corridor, south of the stairwell gap
 	--   3. North piece — inside the corridor, north of the stairwell gap
 	--
-	-- Even flights (fl=0,2,…): start at south wall (+iD/2), step north (−Z).
-	-- Odd  flights (fl=1,3,…): start at north wall (−iD/2), step south (+Z).
-	-- Top step of each flight lands at:
-	--   even → Z =  iD/2 − totalReach
-	--   odd  → Z = −iD/2 + totalReach
-	-- The gap in the slab above is centred on that Z.
+	-- UNIFIED ANCHOR: both the gap and the stairs are measured from anchorZ,
+	-- which is the interior face of the starting wall for that flight.
+	--   Even flights (fl=0,2,…): anchor = +iD/2 (south wall), step north (−Z).
+	--   Odd  flights (fl=1,3,…): anchor = −iD/2 (north wall), step south (+Z).
+	-- The gap opens flush at the anchor and extends gapExtent studs into the room.
+	-- gapExtent = full stair run (18 studs) + LANDING_D (6 studs) = 24 studs.
 
 	local iW         : number = sizeX - WALL_T * 2
 	local iD         : number = sizeZ - WALL_T * 2
@@ -366,20 +366,21 @@ local function GenerateBuilding(
 	for fl = 1, floors - 1 do
 		local slabY     : number = fl * FLOOR_STEP + 0.4
 		local flightIdx : number = fl - 1
-		-- gapStart: distance from the starting wall where the gap opens.
-		-- R15 avatar (~5.6 studs tall) hits the slab at step 6 (feet Y = 6 studs, head = 11.6 > 12).
-		local gapStart : number = 6 * STAIR_STEP_RUN                           -- = 9.0 studs
-		-- gapEnd: past the top step's far edge + flat landing.
-		local gapEnd   : number = totalReach + STAIR_STEP_RUN / 2 + LANDING_D  -- = 24.0 studs
-		-- Convert distances-from-wall to building-local Z coordinates.
+		-- Unified anchor: interior face of the starting wall for this flight.
+		-- The gap and the stairs both use this as their origin.
+		local anchorZ   : number = if flightIdx % 2 == 0 then iD / 2 else -iD / 2
+		-- Gap extent: full stair run + flat landing past the top step.
+		local stairRun  : number = stepsPerFl * STAIR_STEP_RUN  -- = 18 studs
+		local gapExtent : number = stairRun + LANDING_D          -- = 24 studs
+		-- Gap goes from the anchor (starting wall) to gapExtent studs into the room.
 		local gapZMin : number
 		local gapZMax : number
-		if flightIdx % 2 == 0 then   -- even flight: south→north (starts at +iD/2)
-			gapZMax =  iD / 2 - gapStart   -- south edge of gap
-			gapZMin =  iD / 2 - gapEnd     -- north edge (landing side)
-		else                         -- odd  flight: north→south (starts at -iD/2)
-			gapZMin = -iD / 2 + gapStart   -- north edge of gap
-			gapZMax = -iD / 2 + gapEnd     -- south edge (landing side)
+		if flightIdx % 2 == 0 then  -- even: south→north (anchor at +iD/2)
+			gapZMax = anchorZ             -- flush at south interior wall face
+			gapZMin = anchorZ - gapExtent -- 24 studs north (landing end)
+		else                        -- odd: north→south (anchor at -iD/2)
+			gapZMin = anchorZ             -- flush at north interior wall face
+			gapZMax = anchorZ + gapExtent -- 24 studs south (landing end)
 		end
 
 		-- 1. West slab: x ∈ [-iW/2, iW/2 - STAIR_GAP_X], full interior depth

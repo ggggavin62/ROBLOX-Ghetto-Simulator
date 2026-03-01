@@ -1,15 +1,16 @@
 --!strict
 --[[
 	AISpawner.server.luau
-	Maintains exactly TOTAL_TARGET entities (Players + NPCs) at all times.
+	TESTING MODE: spawns exactly 1 NPC for pathfinding/combat testing.
+	TOTAL_TARGET = 1 per CLAUDE.md §4.  Change to 25 when ready for production.
 
 	NPC skins: randomly picks a Roblox User ID from NPC_USER_IDS, fetches
 	its HumanoidDescription via pcall, and applies it with ApplyDescription().
 	Falls back to a plain grey dummy if the web request fails.
 
 	Entity lifecycle:
-	  • Server start    → spawn (TOTAL_TARGET - #Players) NPCs
-	  • PlayerAdded     → destroy one NPC
+	  • Server start    → spawn max(0, TOTAL_TARGET - #Players) NPCs
+	  • PlayerAdded     → destroy one NPC (keeps entity count at TOTAL_TARGET)
 	  • PlayerRemoving  → task.wait(1) then refill
 	  • Humanoid.Died   → destroy after 3 s then refill
 ]]
@@ -24,7 +25,7 @@ local SimplePath: any = require(ReplicatedStorage:WaitForChild("Shared"):WaitFor
 -- Constants
 -- ============================================================
 
-local TOTAL_TARGET       : number = 25
+local TOTAL_TARGET       : number = 1   -- TESTING: set to 25 for production
 local NPC_WALK_SPEED     : number = 12
 local NPC_DETECTION_RANGE: number = 40
 local NPC_SHOOT_RANGE    : number = 40
