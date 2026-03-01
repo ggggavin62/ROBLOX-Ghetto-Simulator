@@ -61,6 +61,8 @@ local WALL_T      : number = 2        -- building wall thickness
 local DOOR_HW     : number = 2.5      -- half-width of doorway opening (5 studs total)
 local DOOR_H      : number = 9        -- doorway clear height (R15 ~= 5.6 studs, 9 is generous)
 local FLOOR_STEP  : number = 12       -- floor-to-floor height
+local STAIR_GAP_X : number = 6        -- stairwell hole width  in X (covers ramp + player clearance)
+local STAIR_GAP_Z : number = 8        -- stairwell hole depth  in Z (covers ramp top exit)
 
 local COL_BASE   = Color3.fromRGB( 50,  50,  50)
 local COL_ROAD   = Color3.fromRGB( 30,  30,  30)
@@ -337,13 +339,60 @@ local function GenerateBuilding(
 		segFloorWall(bf, plotCF * CFrame.new(-sizeX / 2, cy,  0) * ewRot, sizeZ, WALL_T, col)
 	end
 
-	-- ── Interior floor slabs ────────────────────────────────────
-	-- One slab per floor junction, inset by wall thickness on all sides.
+	-- ── Interior floor slabs with stairwell gap ─────────────────
+	-- Each slab is split into 4 parts that leave a STAIR_GAP_X × STAIR_GAP_Z
+	-- hole so players can pass from one floor to the next without bumping their head.
+	--
+	-- Ramp exit point (building-local Z):
+	--   Even-fl ramp (fl=0,2,…) — angle=-45° — exits at z = +HALF_RUN (+6 studs)
+	--   Odd-fl  ramp (fl=1,3,…) — angle=+45° — exits at z = -HALF_RUN (-6 studs)
+	-- Therefore the gap at slab N is:
+	--   N=1 (above even ramp 0) → gap centred at z = +HALF_RUN
+	--   N=2 (above odd  ramp 1) → gap centred at z = -HALF_RUN  (alternates)
+	--
+	-- The four parts per slab:
+	--   Left  strip — full interior depth, left  of the X-gap band
+	--   Right strip — full interior depth, right of the X-gap band
+	--   Front piece — inside the X-gap band, south  of the Z-gap
+	--   Back  piece — inside the X-gap band, north  of the Z-gap
+
+	local iW       : number = sizeX - WALL_T * 2   -- interior width  in X
+	local iD       : number = sizeZ - WALL_T * 2   -- interior depth  in Z
+	local HALF_RUN : number = FLOOR_STEP / 2        -- = 6; ramp Z half-extent at 45°
+
 	for fl = 1, floors - 1 do
-		p("Floor",
-			Vector3.new(sizeX - WALL_T * 2, 0.8, sizeZ - WALL_T * 2),
-			plotCF * CFrame.new(0, fl * FLOOR_STEP + 0.4, 0),
-			col, mat, bf)
+		local slabY   : number = fl * FLOOR_STEP + 0.4
+
+		-- Which Z side does the ramp below exit onto?
+		local gapZ    : number = if fl % 2 == 1 then  HALF_RUN else -HALF_RUN
+		local gapZMin : number = gapZ - STAIR_GAP_Z / 2
+		local gapZMax : number = gapZ + STAIR_GAP_Z / 2
+		local intZMin : number = -iD / 2
+		local intZMax : number =  iD / 2
+
+		-- Left strip: x ∈ [-iW/2, -STAIR_GAP_X/2], full depth
+		local sideW : number = iW / 2 - STAIR_GAP_X / 2
+		if sideW > 0 then
+			p("Floor", Vector3.new(sideW, 0.8, iD),
+				plotCF * CFrame.new(-(STAIR_GAP_X / 2 + sideW / 2), slabY, 0), col, mat, bf)
+			-- Right strip: symmetric
+			p("Floor", Vector3.new(sideW, 0.8, iD),
+				plotCF * CFrame.new( (STAIR_GAP_X / 2 + sideW / 2), slabY, 0), col, mat, bf)
+		end
+
+		-- Front piece: x ∈ X-gap band, z ∈ [intZMin, gapZMin]
+		local frontD : number = gapZMin - intZMin
+		if frontD > 0 then
+			p("Floor", Vector3.new(STAIR_GAP_X, 0.8, frontD),
+				plotCF * CFrame.new(0, slabY, intZMin + frontD / 2), col, mat, bf)
+		end
+
+		-- Back piece: x ∈ X-gap band, z ∈ [gapZMax, intZMax]
+		local backD : number = intZMax - gapZMax
+		if backD > 0 then
+			p("Floor", Vector3.new(STAIR_GAP_X, 0.8, backD),
+				plotCF * CFrame.new(0, slabY, gapZMax + backD / 2), col, mat, bf)
+		end
 	end
 
 	-- ── Zigzag ramps (45°, centred in building, alternating Z-direction) ──────
