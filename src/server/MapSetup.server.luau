@@ -346,6 +346,27 @@ local function GenerateBuilding(
 			col, mat, bf)
 	end
 
+	-- ── Zigzag ramps (45°, centred in building, alternating Z-direction) ──────
+	-- Each ramp connects one floor to the next.
+	-- Horizontal run = FLOOR_STEP (12), vertical rise = FLOOR_STEP (12) → 45°.
+	-- 45° is well within Roblox's default Humanoid.MaxSlopeAngle of 89°.
+	-- rampLen = FLOOR_STEP × √2 ≈ 16.97 studs (hypotenuse at 45°).
+	-- Even transitions (fl=0,2,…) tilt so walking in +Z = going up.
+	-- Odd  transitions (fl=1,3,…) tilt so walking in -Z = going up.
+	-- Both ramps share the same XZ centre (x=0, z=0 in building-local space)
+	-- so a player walks up one, takes two steps, then walks back to climb the next.
+	local rampW   = math.max(3.0, math.min(4.0, sizeX * 0.10))
+	local rampLen = FLOOR_STEP * math.sqrt(2)   -- ≈ 16.97
+
+	for fl = 0, floors - 2 do
+		local midY  = fl * FLOOR_STEP + FLOOR_STEP / 2
+		local angle = if fl % 2 == 0 then -math.rad(45) else math.rad(45)
+		p("Ramp",
+			Vector3.new(rampW, 0.4, rampLen),
+			plotCF * CFrame.new(0, midY, 0) * CFrame.Angles(angle, 0, 0),
+			col, mat, bf)
+	end
+
 	-- ── Roof ────────────────────────────────────────────────────
 	p("Roof",
 		Vector3.new(sizeX + 1, 0.8, sizeZ + 1),
@@ -376,12 +397,29 @@ for i = 1, 8 do
 end
 
 -- ============================================================
--- Step 2 Smoke Test
---   Single 3-floor (36-stud) hollow building at map origin.
---   30 studs wide × 25 studs deep.
---   Ground floor: south doorway (5 × 9 studs).
---   Floors at Y ≈ 12 and Y ≈ 24; roof at Y ≈ 36.
---   Remove or comment this out once Step 3 (stairs + full placement) is done.
+-- 8. Populate city blocks
+--    One building per block across the full 9×9 grid.
+--    Centre block (ci=4, cj=4) is skipped — reserved for the park.
+--    Footprint: 58–64 studs → road + setbacks = 12–18 stud alleys.
+--    Height: 2–4 floors (24, 36, or 48 studs).
 -- ============================================================
 
-GenerateBuilding(CFrame.new(0, 0, 0), 30, 25, 36)
+for ci = 0, GRID_N - 1 do
+	for cj = 0, GRID_N - 1 do
+		if ci == CENTER_IDX and cj == CENTER_IDX then continue end
+
+		local bx = -GRID_HALF + ci * CELL_SIZE
+		local bz = -GRID_HALF + cj * CELL_SIZE
+
+		-- Vary footprint per block for visual interest.
+		-- 58–64 studs wide/deep on a 64-stud block → exterior walls within 1–3 studs of block edge.
+		local sX = math.random(58, 64)
+		local sZ = math.random(58, 64)
+
+		-- 2–4 floors.  Heights must be exact multiples of FLOOR_STEP so
+		-- floor slabs and ramps land at integer stud positions.
+		local h = math.random(2, 4) * FLOOR_STEP
+
+		GenerateBuilding(CFrame.new(bx, 0, bz), sX, sZ, h)
+	end
+end
