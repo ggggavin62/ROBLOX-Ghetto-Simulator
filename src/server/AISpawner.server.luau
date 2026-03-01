@@ -17,6 +17,7 @@
 local Players            = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local CollectionService  = game:GetService("CollectionService")
 
 local SimplePath: any = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("SimplePath"))
 
@@ -433,6 +434,10 @@ local function spawnNPCsToFill()
 
 		local humanoid = model:FindFirstChildOfClass("Humanoid") :: Humanoid
 		npcShootCooldowns[model] = 0
+
+		-- Tag with RealismHook so RealismClient applies head-look rotation
+		-- and material-based footstep sounds to this NPC on all clients.
+		CollectionService:AddTag(humanoid, "RealismHook")
 
 		-- One SimplePath per NPC — provides stuck detection + continuous re-pathing
 		local path = SimplePath.new(model, AGENT_PARAMS)
