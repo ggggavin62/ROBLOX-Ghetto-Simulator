@@ -62,7 +62,9 @@ local DOOR_HW     : number = 2.5      -- half-width of doorway opening (5 studs 
 local DOOR_H      : number = 9        -- doorway clear height (R15 ~= 5.6 studs, 9 is generous)
 local FLOOR_STEP  : number = 12       -- floor-to-floor height
 local STAIR_GAP_X : number = 6        -- stairwell hole width  in X (covers ramp + player clearance)
-local STAIR_GAP_Z : number = 8        -- stairwell hole depth  in Z (covers ramp top exit)
+local STAIR_GAP_Z : number = 8        -- stairwell hole depth  in Z (covers stair top exit)
+local STAIR_STEP_RISE : number = 1.0  -- height of each individual step (studs)
+local STAIR_STEP_RUN  : number = 1.5  -- depth  of each individual step (studs)
 
 local COL_BASE   = Color3.fromRGB( 50,  50,  50)
 local COL_ROAD   = Color3.fromRGB( 30,  30,  30)
@@ -339,81 +341,74 @@ local function GenerateBuilding(
 		segFloorWall(bf, plotCF * CFrame.new(-sizeX / 2, cy,  0) * ewRot, sizeZ, WALL_T, col)
 	end
 
-	-- ── Interior floor slabs with stairwell gap ─────────────────
-	-- Each slab is split into 4 parts that leave a STAIR_GAP_X × STAIR_GAP_Z
-	-- hole so players can pass from one floor to the next without bumping their head.
+	-- ── Interior floor slabs + wall-hugging stepped stairs ──────
+	-- Stairs run along the EAST interior wall (local x = iW/2).
+	-- The stair corridor occupies x ∈ [iW/2 - STAIR_GAP_X, iW/2].
+	-- Each floor slab is 3 parts:
+	--   1. West slab  — full depth, west of the corridor
+	--   2. South piece — inside the corridor, south of the stairwell gap
+	--   3. North piece — inside the corridor, north of the stairwell gap
 	--
-	-- Ramp exit point (building-local Z):
-	--   Even-fl ramp (fl=0,2,…) — angle=-45° — exits at z = +HALF_RUN (+6 studs)
-	--   Odd-fl  ramp (fl=1,3,…) — angle=+45° — exits at z = -HALF_RUN (-6 studs)
-	-- Therefore the gap at slab N is:
-	--   N=1 (above even ramp 0) → gap centred at z = +HALF_RUN
-	--   N=2 (above odd  ramp 1) → gap centred at z = -HALF_RUN  (alternates)
-	--
-	-- The four parts per slab:
-	--   Left  strip — full interior depth, left  of the X-gap band
-	--   Right strip — full interior depth, right of the X-gap band
-	--   Front piece — inside the X-gap band, south  of the Z-gap
-	--   Back  piece — inside the X-gap band, north  of the Z-gap
+	-- Even flights (fl=0,2,…): start at south wall (+iD/2), step north (−Z).
+	-- Odd  flights (fl=1,3,…): start at north wall (−iD/2), step south (+Z).
+	-- Top step of each flight lands at:
+	--   even → Z =  iD/2 − totalReach
+	--   odd  → Z = −iD/2 + totalReach
+	-- The gap in the slab above is centred on that Z.
 
-	local iW       : number = sizeX - WALL_T * 2   -- interior width  in X
-	local iD       : number = sizeZ - WALL_T * 2   -- interior depth  in Z
-	local HALF_RUN : number = FLOOR_STEP / 2        -- = 6; ramp Z half-extent at 45°
+	local iW         : number = sizeX - WALL_T * 2
+	local iD         : number = sizeZ - WALL_T * 2
+	local stepsPerFl : number = math.floor(FLOOR_STEP / STAIR_STEP_RISE)   -- = 12
+	local totalReach : number = (stepsPerFl - 1) * STAIR_STEP_RUN + STAIR_STEP_RUN / 2  -- = 17.25
+	local stairCX    : number = iW / 2 - STAIR_GAP_X / 2   -- corridor centre X (local)
 
+	-- 3-part floor slabs
 	for fl = 1, floors - 1 do
-		local slabY   : number = fl * FLOOR_STEP + 0.4
+		local slabY     : number = fl * FLOOR_STEP + 0.4
+		local flightIdx : number = fl - 1   -- 0-based index of the flight below this slab
+		local topZ      : number = if flightIdx % 2 == 0
+			then  iD / 2 - totalReach          -- even flight: top step near north of flight
+			else -(iD / 2 - totalReach)        -- odd  flight: top step near south of flight
+		local gapZMin : number = topZ - STAIR_GAP_Z / 2
+		local gapZMax : number = topZ + STAIR_GAP_Z / 2
 
-		-- Which Z side does the ramp below exit onto?
-		local gapZ    : number = if fl % 2 == 1 then  HALF_RUN else -HALF_RUN
-		local gapZMin : number = gapZ - STAIR_GAP_Z / 2
-		local gapZMax : number = gapZ + STAIR_GAP_Z / 2
-		local intZMin : number = -iD / 2
-		local intZMax : number =  iD / 2
-
-		-- Left strip: x ∈ [-iW/2, -STAIR_GAP_X/2], full depth
-		local sideW : number = iW / 2 - STAIR_GAP_X / 2
-		if sideW > 0 then
-			p("Floor", Vector3.new(sideW, 0.8, iD),
-				plotCF * CFrame.new(-(STAIR_GAP_X / 2 + sideW / 2), slabY, 0), col, mat, bf)
-			-- Right strip: symmetric
-			p("Floor", Vector3.new(sideW, 0.8, iD),
-				plotCF * CFrame.new( (STAIR_GAP_X / 2 + sideW / 2), slabY, 0), col, mat, bf)
+		-- 1. West slab: x ∈ [-iW/2, iW/2 - STAIR_GAP_X], full interior depth
+		local westW : number = iW - STAIR_GAP_X
+		if westW > 0 then
+			p("Floor", Vector3.new(westW, 0.8, iD),
+				plotCF * CFrame.new(-STAIR_GAP_X / 2, slabY, 0), col, mat, bf)
 		end
 
-		-- Front piece: x ∈ X-gap band, z ∈ [intZMin, gapZMin]
-		local frontD : number = gapZMin - intZMin
+		-- 2. South piece in stair corridor (south of gap)
+		local frontD : number = gapZMin - (-iD / 2)
 		if frontD > 0 then
 			p("Floor", Vector3.new(STAIR_GAP_X, 0.8, frontD),
-				plotCF * CFrame.new(0, slabY, intZMin + frontD / 2), col, mat, bf)
+				plotCF * CFrame.new(stairCX, slabY, -iD / 2 + frontD / 2), col, mat, bf)
 		end
 
-		-- Back piece: x ∈ X-gap band, z ∈ [gapZMax, intZMax]
-		local backD : number = intZMax - gapZMax
+		-- 3. North piece in stair corridor (north of gap)
+		local backD : number = iD / 2 - gapZMax
 		if backD > 0 then
 			p("Floor", Vector3.new(STAIR_GAP_X, 0.8, backD),
-				plotCF * CFrame.new(0, slabY, gapZMax + backD / 2), col, mat, bf)
+				plotCF * CFrame.new(stairCX, slabY, gapZMax + backD / 2), col, mat, bf)
 		end
 	end
 
-	-- ── Zigzag ramps (45°, centred in building, alternating Z-direction) ──────
-	-- Each ramp connects one floor to the next.
-	-- Horizontal run = FLOOR_STEP (12), vertical rise = FLOOR_STEP (12) → 45°.
-	-- 45° is well within Roblox's default Humanoid.MaxSlopeAngle of 89°.
-	-- rampLen = FLOOR_STEP × √2 ≈ 16.97 studs (hypotenuse at 45°).
-	-- Even transitions (fl=0,2,…) tilt so walking in +Z = going up.
-	-- Odd  transitions (fl=1,3,…) tilt so walking in -Z = going up.
-	-- Both ramps share the same XZ centre (x=0, z=0 in building-local space)
-	-- so a player walks up one, takes two steps, then walks back to climb the next.
-	local rampW   = math.max(3.0, math.min(4.0, sizeX * 0.10))
-	local rampLen = FLOOR_STEP * math.sqrt(2)   -- ≈ 16.97
-
+	-- ── Stepped staircases against east interior wall ────────────
+	-- 12 individual step Parts per flight (1 stud rise × 1.5 stud run × 6 stud wide).
+	-- The top of step 11 reaches exactly the next floor level (12 × 1 = 12 = FLOOR_STEP).
 	for fl = 0, floors - 2 do
-		local midY  = fl * FLOOR_STEP + FLOOR_STEP / 2
-		local angle = if fl % 2 == 0 then -math.rad(45) else math.rad(45)
-		p("Ramp",
-			Vector3.new(rampW, 0.4, rampLen),
-			plotCF * CFrame.new(0, midY, 0) * CFrame.Angles(angle, 0, 0),
-			col, mat, bf)
+		local flBase : number = fl * FLOOR_STEP
+		for i = 0, stepsPerFl - 1 do
+			local stepCY : number = flBase + i * STAIR_STEP_RISE + STAIR_STEP_RISE / 2
+			local stepCZ : number = if fl % 2 == 0
+				then  iD / 2 - i * STAIR_STEP_RUN - STAIR_STEP_RUN / 2   -- south→north
+				else -(iD / 2) + i * STAIR_STEP_RUN + STAIR_STEP_RUN / 2 -- north→south
+			p("Step",
+				Vector3.new(STAIR_GAP_X, STAIR_STEP_RISE, STAIR_STEP_RUN),
+				plotCF * CFrame.new(stairCX, stepCY, stepCZ),
+				col, Enum.Material.Concrete, bf)
+		end
 	end
 
 	-- ── Roof ────────────────────────────────────────────────────
