@@ -18,9 +18,9 @@
 - **Security:** NEVER trust the client. Server must verify raycast distances and line-of-sight before applying damage to prevent exploiters.
 - **Scoring:** `Leaderstats` tracks "Kills" and "Deaths". Killing an AI NPC counts exactly the same as killing a real player.
 
-## 4. The "Backfill" AI System
-- **Player Target:** The server must always have exactly 25 entities (Players + NPCs).
-- **Logic:** `ServerScriptService/AISpawner.luau` checks player count. If Players < 25, spawn NPCs. Despawn one NPC instantly when a real player joins.
+## 4. The AI System
+- **Testing Target:** For now, the server must ONLY generate exactly 1 NPC for testing purposes. Do not backfill to 25 entities yet.
+- **Logic:** `ServerScriptService/AISpawner.luau` should spawn just a single NPC to test pathfinding and combat.
 - **NPC Design:** NPCs use `PathfindingService`. They must use `HumanoidDescription` fetched via UserID so they look like real Roblox players, and must have the `Animate` script loaded so they don't float.
 
 ## 5. Coding Standards
