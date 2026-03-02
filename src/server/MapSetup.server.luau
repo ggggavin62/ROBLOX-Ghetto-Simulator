@@ -62,7 +62,8 @@ local DOOR_HW     : number = 2.5      -- half-width of doorway opening (5 studs 
 local DOOR_H      : number = 9        -- doorway clear height (R15 ~= 5.6 studs, 9 is generous)
 local FLOOR_STEP  : number = 12       -- floor-to-floor height
 local STAIR_GAP_X : number = 6        -- stairwell hole width  in X (covers ramp + player clearance)
-local LANDING_D   : number = 6.0      -- flat landing depth past the top stair step (studs)
+local LANDING_D      : number = 6.0   -- flat top landing past the last step (studs)
+local STAIR_OFFSET   : number = 4.0   -- bottom landing: clear space before step 0 (studs)
 local STAIR_STEP_RISE : number = 1.0  -- height of each individual step (studs)
 local STAIR_STEP_RUN  : number = 1.5  -- depth  of each individual step (studs)
 
@@ -342,62 +343,64 @@ local function GenerateBuilding(
 	end
 
 	-- ── Interior floor slabs + wall-hugging stepped stairs ──────
-	-- Stairs run along the EAST interior wall (local x = iW/2).
-	-- The stair corridor occupies x ∈ [iW/2 - STAIR_GAP_X, iW/2].
-	-- Each floor slab is 3 parts:
-	--   1. West slab  — full depth, west of the corridor
-	--   2. South piece — inside the corridor, south of the stairwell gap
-	--   3. North piece — inside the corridor, north of the stairwell gap
+	-- BOUNDING BOX APPROACH — all dimensions are calculated first, then
+	-- the gap and the step loop both use the EXACT same anchor and extents.
 	--
-	-- UNIFIED ANCHOR: both the gap and the stairs are measured from anchorZ,
-	-- which is the interior face of the starting wall for that flight.
-	--   Even flights (fl=0,2,…): anchor = +iD/2 (south wall), step north (−Z).
-	--   Odd  flights (fl=1,3,…): anchor = −iD/2 (north wall), step south (+Z).
-	-- The gap opens flush at the anchor and extends gapExtent studs into the room.
-	-- gapExtent = full stair run (18 studs) + LANDING_D (6 studs) = 24 studs.
+	-- Stairwell bounding box per flight:
+	--   stairRun  = stepsPerFl × STAIR_STEP_RUN          = 18 studs (step footprint)
+	--   gapLength = STAIR_OFFSET + stairRun + LANDING_D  = 28 studs (total hole)
+	--
+	-- Layout inside the 28-stud hole (from starting-wall inward):
+	--   [0 … 4)      → STAIR_OFFSET   : bottom landing (clear floor to step onto)
+	--   [4 … 22)     → stairRun       : 12 steps, each 1.5 studs deep
+	--   [22 … 28)    → LANDING_D      : flat top landing before the far edge of the hole
+	--
+	-- Corridor position: flush against the east interior wall.
+	--   X ∈ [iW/2 − STAIR_GAP_X, iW/2],  centre at stairCX = iW/2 − STAIR_GAP_X/2
+	-- Travel direction (Z):
+	--   Even flights (fl=0,2,…): start at south wall (+iD/2), step north (−Z).
+	--   Odd  flights (fl=1,3,…): start at north wall (−iD/2), step south (+Z).
+	-- anchorZ = interior face of the starting wall for each flight.
 
 	local iW         : number = sizeX - WALL_T * 2
 	local iD         : number = sizeZ - WALL_T * 2
-	local stepsPerFl : number = math.floor(FLOOR_STEP / STAIR_STEP_RISE)   -- = 12
-	local totalReach : number = (stepsPerFl - 1) * STAIR_STEP_RUN + STAIR_STEP_RUN / 2  -- = 17.25
-	local stairCX    : number = iW / 2 - STAIR_GAP_X / 2   -- corridor centre X (local)
+	local stepsPerFl : number = math.floor(FLOOR_STEP / STAIR_STEP_RISE)  -- = 12
+	local stairRun   : number = stepsPerFl * STAIR_STEP_RUN               -- = 18 studs
+	local gapLength  : number = STAIR_OFFSET + stairRun + LANDING_D       -- = 28 studs
+	local stairCX    : number = iW / 2 - STAIR_GAP_X / 2                  -- corridor centre X
 
-	-- 3-part floor slabs
+	-- ── 3-part floor slabs ──
 	for fl = 1, floors - 1 do
 		local slabY     : number = fl * FLOOR_STEP + 0.4
 		local flightIdx : number = fl - 1
-		-- Unified anchor: interior face of the starting wall for this flight.
-		-- The gap and the stairs both use this as their origin.
 		local anchorZ   : number = if flightIdx % 2 == 0 then iD / 2 else -iD / 2
-		-- Gap extent: full stair run + flat landing past the top step.
-		local stairRun  : number = stepsPerFl * STAIR_STEP_RUN  -- = 18 studs
-		local gapExtent : number = stairRun + LANDING_D          -- = 24 studs
-		-- Gap goes from the anchor (starting wall) to gapExtent studs into the room.
+
+		-- The hole spans exactly gapLength studs inward from anchorZ.
 		local gapZMin : number
 		local gapZMax : number
-		if flightIdx % 2 == 0 then  -- even: south→north (anchor at +iD/2)
-			gapZMax = anchorZ             -- flush at south interior wall face
-			gapZMin = anchorZ - gapExtent -- 24 studs north (landing end)
-		else                        -- odd: north→south (anchor at -iD/2)
-			gapZMin = anchorZ             -- flush at north interior wall face
-			gapZMax = anchorZ + gapExtent -- 24 studs south (landing end)
+		if flightIdx % 2 == 0 then  -- even: south→north
+			gapZMax = anchorZ             -- south edge (starting-wall side)
+			gapZMin = anchorZ - gapLength -- north edge (far side, 28 studs in)
+		else                        -- odd: north→south
+			gapZMin = anchorZ             -- north edge (starting-wall side)
+			gapZMax = anchorZ + gapLength -- south edge (far side, 28 studs in)
 		end
 
-		-- 1. West slab: x ∈ [-iW/2, iW/2 - STAIR_GAP_X], full interior depth
+		-- 1. West slab — full interior depth, west of the stair corridor
 		local westW : number = iW - STAIR_GAP_X
 		if westW > 0 then
 			p("Floor", Vector3.new(westW, 0.8, iD),
 				plotCF * CFrame.new(-STAIR_GAP_X / 2, slabY, 0), col, mat, bf)
 		end
 
-		-- 2. South piece in stair corridor (south of gap)
+		-- 2. South piece in stair corridor (south of the hole)
 		local frontD : number = gapZMin - (-iD / 2)
 		if frontD > 0 then
 			p("Floor", Vector3.new(STAIR_GAP_X, 0.8, frontD),
 				plotCF * CFrame.new(stairCX, slabY, -iD / 2 + frontD / 2), col, mat, bf)
 		end
 
-		-- 3. North piece in stair corridor (north of gap)
+		-- 3. North piece in stair corridor (north of the hole)
 		local backD : number = iD / 2 - gapZMax
 		if backD > 0 then
 			p("Floor", Vector3.new(STAIR_GAP_X, 0.8, backD),
@@ -405,16 +408,18 @@ local function GenerateBuilding(
 		end
 	end
 
-	-- ── Stepped staircases against east interior wall ────────────
-	-- 12 individual step Parts per flight (1 stud rise × 1.5 stud run × 6 stud wide).
-	-- The top of step 11 reaches exactly the next floor level (12 × 1 = 12 = FLOOR_STEP).
+	-- ── Stepped staircases ──
+	-- Step 0 begins STAIR_OFFSET studs from anchorZ (bottom landing).
+	-- Step i centre: anchorZ + dir*(STAIR_OFFSET + i*STAIR_STEP_RUN + STAIR_STEP_RUN/2)
+	-- Step 11 top surface lands exactly at the next floor level (12×1 = FLOOR_STEP). ✓
 	for fl = 0, floors - 2 do
-		local flBase : number = fl * FLOOR_STEP
+		local flBase  : number = fl * FLOOR_STEP
+		local anchorZ : number = if fl % 2 == 0 then  iD / 2 else -iD / 2
+		local dir     : number = if fl % 2 == 0 then -1       else  1
 		for i = 0, stepsPerFl - 1 do
 			local stepCY : number = flBase + i * STAIR_STEP_RISE + STAIR_STEP_RISE / 2
-			local stepCZ : number = if fl % 2 == 0
-				then  iD / 2 - i * STAIR_STEP_RUN - STAIR_STEP_RUN / 2   -- south→north
-				else -(iD / 2) + i * STAIR_STEP_RUN + STAIR_STEP_RUN / 2 -- north→south
+			local stepCZ : number = anchorZ
+				+ dir * (STAIR_OFFSET + i * STAIR_STEP_RUN + STAIR_STEP_RUN / 2)
 			p("Step",
 				Vector3.new(STAIR_GAP_X, STAIR_STEP_RISE, STAIR_STEP_RUN),
 				plotCF * CFrame.new(stairCX, stepCY, stepCZ),
