@@ -347,13 +347,13 @@ local function GenerateBuilding(
 	-- the gap and the step loop both use the EXACT same anchor and extents.
 	--
 	-- Stairwell bounding box per flight:
-	--   stairRun  = stepsPerFl × STAIR_STEP_RUN          = 18 studs (step footprint)
-	--   gapLength = STAIR_OFFSET + stairRun + LANDING_D  = 28 studs (total hole)
+	--   stairRun  = stepsPerFl × STAIR_STEP_RUN  = 18 studs (step footprint)
+	--   gapLength = STAIR_OFFSET + stairRun       = 22 studs (hole ends at step 11's far edge)
 	--
-	-- Layout inside the 28-stud hole (from starting-wall inward):
-	--   [0 … 4)      → STAIR_OFFSET   : bottom landing (clear floor to step onto)
-	--   [4 … 22)     → stairRun       : 12 steps, each 1.5 studs deep
-	--   [22 … 28)    → LANDING_D      : flat top landing before the far edge of the hole
+	-- Layout inside the 22-stud hole (from starting-wall inward):
+	--   [0 … 4)   → STAIR_OFFSET : bottom landing — clear floor before step 0
+	--   [4 … 22)  → stairRun     : 12 steps × 1.5 studs each
+	--   at 22     → hole ends; solid floor resumes so player steps off directly onto slab
 	--
 	-- Corridor position: flush against the east interior wall.
 	--   X ∈ [iW/2 − STAIR_GAP_X, iW/2],  centre at stairCX = iW/2 − STAIR_GAP_X/2
@@ -366,7 +366,7 @@ local function GenerateBuilding(
 	local iD         : number = sizeZ - WALL_T * 2
 	local stepsPerFl : number = math.floor(FLOOR_STEP / STAIR_STEP_RISE)  -- = 12
 	local stairRun   : number = stepsPerFl * STAIR_STEP_RUN               -- = 18 studs
-	local gapLength  : number = STAIR_OFFSET + stairRun + LANDING_D       -- = 28 studs
+	local gapLength  : number = STAIR_OFFSET + stairRun  -- = 22; hole ends at step 11's far edge
 	local stairCX    : number = iW / 2 - STAIR_GAP_X / 2                  -- corridor centre X
 
 	-- ── 3-part floor slabs ──
