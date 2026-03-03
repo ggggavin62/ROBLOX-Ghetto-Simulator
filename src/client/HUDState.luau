@@ -2,30 +2,68 @@
 --[[
 	HUDState.luau  (ModuleScript — StarterPlayerScripts)
 
-	Shared Fusion reactive state for all HUD elements.
-	Both HUDController and WeaponHandler require this module to
-	read from (via Computed) or write to (via :set()) the same state objects.
+	Shared observable state for all HUD elements.
+	Replaces Fusion.Value with a minimal hand-rolled observable so that
+	no external packages are required.
 
-	Fusion 0.2.0 Value objects update all subscribers immediately when :set() is called.
+	Each value exposes:
+	  :get()             → returns the current value
+	  :set(newVal)       → sets the value and fires all onChange listeners
+	  :onChange(fn)      → registers a callback invoked on every :set() call
+
+	WeaponHandler.client writes via :set().
+	HUDController.client reads via :get() and subscribes via :onChange().
 ]]
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+-- ============================================================
+-- Observable type
+-- ============================================================
 
-local Fusion: any = require(
-	ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Fusion")
-)
+type Observable = {
+	get:      (self: Observable) -> any,
+	set:      (self: Observable, newVal: any) -> (),
+	onChange: (self: Observable, fn: (any) -> ()) -> (),
+}
+
+local function makeValue(initial: any): Observable
+	local current: any              = initial
+	local listeners: { (any) -> () } = {}
+
+	local obs: Observable = {
+		get = function(_self: Observable): any
+			return current
+		end,
+
+		set = function(_self: Observable, newVal: any)
+			current = newVal
+			for _, fn in listeners do
+				fn(newVal)
+			end
+		end,
+
+		onChange = function(_self: Observable, fn: (any) -> ())
+			table.insert(listeners, fn)
+		end,
+	}
+
+	return obs
+end
+
+-- ============================================================
+-- Exported state table
+-- ============================================================
 
 return {
-	-- Health (updated by HUDController on Humanoid.HealthChanged)
-	hp    = Fusion.Value(100),
-	maxHp = Fusion.Value(100),
+	-- Health (written by HUDController on Humanoid.HealthChanged)
+	hp    = makeValue(100),
+	maxHp = makeValue(100),
 
-	-- Ammo (updated by WeaponHandler.updateAmmoUI)
-	ammo        = Fusion.Value(0),
-	magSize     = Fusion.Value(0),
-	isReloading = Fusion.Value(false),
+	-- Ammo (written by WeaponHandler.updateAmmoUI)
+	ammo        = makeValue(0),
+	magSize     = makeValue(0),
+	isReloading = makeValue(false),
 
-	-- Weapon identity (updated by WeaponHandler.updateAmmoUI)
-	weaponName = Fusion.Value(""),
-	slotLine   = Fusion.Value(""),
+	-- Weapon identity (written by WeaponHandler.updateAmmoUI)
+	weaponName = makeValue(""),
+	slotLine   = makeValue(""),
 }

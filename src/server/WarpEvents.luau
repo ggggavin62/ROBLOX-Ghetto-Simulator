@@ -2,35 +2,86 @@
 --[[
 	WarpEvents.luau  (ModuleScript — ServerScriptService)
 
-	Single source of truth for all server-side Warp event objects.
+	Single source of truth for all server-side networking events.
+	Replaces the Warp library with standard Roblox RemoteEvents stored in
+	ReplicatedStorage/Events/.
 
-	WHY THIS EXISTS
-	Warp v1.0.14 uses a sequential uint8 to identify each event in the
-	binary packet instead of sending the full string name.  The uint8 is
-	assigned by the ORDER in which Warp.Server("X") / Warp.Client("X") is
-	first called in each Luau VM.  If server and client register identifiers
-	in different orders the wrong handlers fire.
+	Exposes the same call surface used by all callers:
+	  :Fire(true, player, ...)  → FireClient(player, ...)
+	  :Fires(true, ...)         → FireAllClients(...)
+	  :Connect(handler)         → OnServerEvent:Connect(handler)
 
-	The fix: every server script that needs a Warp event requires THIS module.
-	Lua's module cache guarantees that Warp.Server("X") is called exactly once
-	per identifier, in the order listed below.  The matching client module
-	(StarterPlayerScripts/WarpEvents) lists them in identical order.
-
-	  Server ID 0 → WeaponFired   (client → server)
-	  Server ID 1 → ReloadState   (server → client)
-	  Server ID 2 → HitConfirmed  (server → client)
-	  Server ID 3 → KillFeed      (server → client)
-	  Server ID 4 → WeaponPickup  (server → client)
+	Events:
+	  WeaponFired   — client → server  (damage request from WeaponHandler)
+	  ReloadState   — server → client  (reload started / completed)
+	  HitConfirmed  — server → client  (hit-marker confirmation)
+	  KillFeed      — server → all     (kill-feed broadcast)
+	  WeaponPickup  — server → client  (weapon granted by PlayerSetup)
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Warp: any = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Warp"))
 
--- IMPORTANT: order must match src/client/WarpEvents.luau exactly.
+-- ============================================================
+-- Events folder  (create once; idempotent)
+-- ============================================================
+
+local eventsFolder: Folder
+do
+	local existing = ReplicatedStorage:FindFirstChild("Events")
+	if existing and existing:IsA("Folder") then
+		eventsFolder = existing :: Folder
+	else
+		eventsFolder        = Instance.new("Folder")
+		eventsFolder.Name   = "Events"
+		eventsFolder.Parent = ReplicatedStorage
+	end
+end
+
+local function getOrCreate(name: string): RemoteEvent
+	local existing = eventsFolder:FindFirstChild(name)
+	if existing and existing:IsA("RemoteEvent") then
+		return existing :: RemoteEvent
+	end
+	local re        = Instance.new("RemoteEvent")
+	re.Name         = name
+	re.Parent       = eventsFolder
+	return re
+end
+
+-- ============================================================
+-- Wrapper factory  (server-side)
+-- ============================================================
+
+type ServerEvent = {
+	Fire:    (self: ServerEvent, _toClient: boolean, player: Player,  ...any) -> (),
+	Fires:   (self: ServerEvent, _toAll:   boolean,                   ...any) -> (),
+	Connect: (self: ServerEvent, handler:  (Player, ...any) -> ())          -> (),
+}
+
+local function serverEvent(name: string): ServerEvent
+	local re = getOrCreate(name)
+	return {
+		Fire = function(_self: ServerEvent, _toClient: boolean, player: Player, ...: any)
+			re:FireClient(player, ...)
+		end,
+		Fires = function(_self: ServerEvent, _toAll: boolean, ...: any)
+			re:FireAllClients(...)
+		end,
+		Connect = function(_self: ServerEvent, handler: (Player, ...any) -> ())
+			re.OnServerEvent:Connect(handler)
+		end,
+	} :: ServerEvent
+end
+
+-- ============================================================
+-- Event registry  (order kept for documentation; no longer matters
+-- now that we use named RemoteEvents instead of uint8 IDs)
+-- ============================================================
+
 return {
-	WeaponFired  = Warp.Server("WeaponFired"),   -- 0  client→server (damage request)
-	ReloadState  = Warp.Server("ReloadState"),   -- 1  server→client
-	HitConfirmed = Warp.Server("HitConfirmed"),  -- 2  server→client (hit marker)
-	KillFeed     = Warp.Server("KillFeed"),      -- 3  server→client (kill feed)
-	WeaponPickup = Warp.Server("WeaponPickup"),  -- 4  server→client
+	WeaponFired  = serverEvent("WeaponFired"),   -- client → server
+	ReloadState  = serverEvent("ReloadState"),   -- server → client
+	HitConfirmed = serverEvent("HitConfirmed"),  -- server → client
+	KillFeed     = serverEvent("KillFeed"),      -- server → all
+	WeaponPickup = serverEvent("WeaponPickup"),  -- server → client
 }

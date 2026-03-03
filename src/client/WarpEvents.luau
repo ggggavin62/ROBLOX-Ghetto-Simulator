@@ -2,26 +2,56 @@
 --[[
 	WarpEvents.luau  (ModuleScript — StarterPlayerScripts)
 
-	Single source of truth for all client-side Warp event objects.
+	Single source of truth for all client-side networking events.
+	Replaces the Warp library with standard Roblox RemoteEvents stored in
+	ReplicatedStorage/Events/ (created by the server-side WarpEvents module).
 
-	Identifiers MUST be declared in the SAME ORDER as
-	src/server/WarpEvents.luau so the uint8 IDs match.
+	Exposes the same call surface used by all callers:
+	  :Fire(true, ...)     → FireServer(...)
+	  :Connect(handler)   → OnClientEvent:Connect(handler)
 
-	  Client ID 0 → WeaponFired   (this client fires to server)
-	  Client ID 1 → ReloadState   (server fires to this client)
-	  Client ID 2 → HitConfirmed  (server fires to this client)
-	  Client ID 3 → KillFeed      (server fires to this client)
-	  Client ID 4 → WeaponPickup  (server fires to this client)
+	Events (must reference the same names as server/WarpEvents.luau):
+	  WeaponFired   — this client fires to server
+	  ReloadState   — server fires to this client
+	  HitConfirmed  — server fires to this client
+	  KillFeed      — server fires to all clients
+	  WeaponPickup  — server fires to this client
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Warp: any = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Warp"))
 
--- IMPORTANT: order must match src/server/WarpEvents.luau exactly.
+-- Wait for the Events folder and its RemoteEvents to be created by the server.
+local eventsFolder = ReplicatedStorage:WaitForChild("Events") :: Folder
+
+-- ============================================================
+-- Wrapper factory  (client-side)
+-- ============================================================
+
+type ClientEvent = {
+	Fire:    (self: ClientEvent, _toServer: boolean, ...any) -> (),
+	Connect: (self: ClientEvent, handler:   (...any) -> ()) -> (),
+}
+
+local function clientEvent(name: string): ClientEvent
+	local re = eventsFolder:WaitForChild(name) :: RemoteEvent
+	return {
+		Fire = function(_self: ClientEvent, _toServer: boolean, ...: any)
+			re:FireServer(...)
+		end,
+		Connect = function(_self: ClientEvent, handler: (...any) -> ())
+			re.OnClientEvent:Connect(handler)
+		end,
+	} :: ClientEvent
+end
+
+-- ============================================================
+-- Event registry
+-- ============================================================
+
 return {
-	WeaponFired  = Warp.Client("WeaponFired"),   -- 0
-	ReloadState  = Warp.Client("ReloadState"),   -- 1
-	HitConfirmed = Warp.Client("HitConfirmed"),  -- 2
-	KillFeed     = Warp.Client("KillFeed"),      -- 3
-	WeaponPickup = Warp.Client("WeaponPickup"),  -- 4
+	WeaponFired  = clientEvent("WeaponFired"),   -- client fires to server
+	ReloadState  = clientEvent("ReloadState"),   -- server fires to client
+	HitConfirmed = clientEvent("HitConfirmed"),  -- server fires to client
+	KillFeed     = clientEvent("KillFeed"),      -- server fires to all
+	WeaponPickup = clientEvent("WeaponPickup"),  -- server fires to client
 }

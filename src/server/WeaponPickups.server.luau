@@ -2,93 +2,58 @@
 --[[
 	WeaponPickups.server.luau  (Script — ServerScriptService)
 
-	Spawns 8 weapon pickup parts around the map arena.
-	Each pickup has:
-	  • A coloured Part (weapon indicator colour by type)
-	  • A BillboardGui showing the weapon name
-	  • A ProximityPrompt ("Pick Up [WeaponName]")
-
-	When a player triggers the prompt:
-	  1. Slot 1 (primary) is replaced with the picked-up weapon.
-	  2. WeaponPickup:FireClient sends (player, weaponKey, 1).
-	  3. The pickup disappears for 30 s then respawns.
+	Spawns real 3D weapon models (cloned from ReplicatedStorage/Weapons) at
+	the positions defined in PICKUP_DEFS.  Each model:
+	  • Has all BaseParts anchored + non-collidable (players walk through)
+	  • Has a ProximityPrompt on its Handle part
+	  • Grants the weapon via RBX_Toolbox when the prompt is triggered
+	  • Hides for RESPAWN_DELAY seconds then reappears
 ]]
 
-local Players             = game:GetService("Players")
-local ReplicatedStorage   = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
-local Workspace           = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace         = game:GetService("Workspace")
 
 local WeaponData = require(
 	ReplicatedStorage:WaitForChild("Shared"):WaitForChild("WeaponData")
 ) :: { [string]: { Name: string, Type: string, Damage: number, FireRate: number,
 	MagSize: number, Spread: number, Recoil: number, FireMode: string, BulletsPerShot: number } }
 
--- Centralised Warp events (all identifiers registered in WarpEvents.luau)
-local WarpEvents        = require(ServerScriptService:WaitForChild("WarpEvents"))
-local WeaponPickupEvent = WarpEvents.WeaponPickup
+-- Physical weapon models live here — one Model per weaponKey
+local weaponsFolder = ReplicatedStorage:WaitForChild("Weapons")
+
+-- RBX_Toolbox: server API for granting weapons to player inventory
+local RBXToolbox = require(ReplicatedStorage:WaitForChild("RBX_Toolbox"))
 
 -- ============================================================
 -- Constants
 -- ============================================================
 
 local RESPAWN_DELAY = 30   -- seconds before a pickup reappears
-local PICKUP_SIZE   = Vector3.new(1.5, 0.4, 3.5)
-local PICKUP_HEIGHT = 1.0  -- studs above ground
+local PICKUP_HEIGHT = 2.0  -- studs above ground
 
--- Colour coding by weapon type
-local TYPE_COLOUR: { [string]: Color3 } = {
-	Pistol  = Color3.fromRGB(180, 180, 180),  -- grey
-	SMG     = Color3.fromRGB(80,  160, 220),  -- blue
-	Shotgun = Color3.fromRGB(200, 100, 50),   -- orange
-	Rifle   = Color3.fromRGB(60,  180, 80),   -- green
-	Sniper  = Color3.fromRGB(220, 60,  60),   -- red
-}
-
--- 8 pickup definitions: { weaponKey, CFrame }
+-- 10 pickup definitions: one of every weapon, ringing the centre building.
 --
--- Positions use the procedural city grid from MapSetup.server.luau:
---   CELL_SIZE = 76, BLOCK_SIZE = 64
---   Block centres: ±76, ±152, ±228, ±304  (city extent ±336)
---
--- Each pickup sits at a block centre (inside a building ground floor).
--- The ProximityPrompt fires when the player enters and walks within 8 studs.
--- Y = PICKUP_HEIGHT (1.0) = resting on the building floor slab.
+-- The test building at origin is 30×25 studs, so its corners reach ~19.5 studs
+-- from centre.  All pickups are placed at radius ≥ 22 studs so they sit in
+-- the open green pad area (block edge is at ±32 studs), fully visible from
+-- any of the 8 SpawnLocations that ring the centre block.
+-- Y = 2 studs: safely above the baseplate (Y=0) and block pad (top at Y=0.1).
 type PickupDef = {
 	weaponKey: string,
 	cf:        CFrame,
 }
 
 local PICKUP_DEFS: { PickupDef } = {
-	-- ── Inner ring: blocks at ±76 studs from centre (8 pickups) ──────────
-	{ weaponKey = "Glock19",     cf = CFrame.new( -76, PICKUP_HEIGHT,  -76) },
-	{ weaponKey = "Uzi",         cf = CFrame.new(  76, PICKUP_HEIGHT,  -76) },
-	{ weaponKey = "AK47",        cf = CFrame.new( -76, PICKUP_HEIGHT,   76) },
-	{ weaponKey = "SCARL",       cf = CFrame.new(  76, PICKUP_HEIGHT,   76) },
-	{ weaponKey = "MAC10",       cf = CFrame.new(   0, PICKUP_HEIGHT,  -76) },
-	{ weaponKey = "KrissVector", cf = CFrame.new(   0, PICKUP_HEIGHT,   76) },
-	{ weaponKey = "Mossberg500", cf = CFrame.new( -76, PICKUP_HEIGHT,    0) },
-	{ weaponKey = "ARPistol",    cf = CFrame.new(  76, PICKUP_HEIGHT,    0) },
-
-	-- ── Mid ring: blocks at ±152 studs (8 pickups) ───────────────────────
-	{ weaponKey = "AK47",        cf = CFrame.new(   0, PICKUP_HEIGHT, -152) },
-	{ weaponKey = "SCARL",       cf = CFrame.new(   0, PICKUP_HEIGHT,  152) },
-	{ weaponKey = "MAC10",       cf = CFrame.new(-152, PICKUP_HEIGHT,    0) },
-	{ weaponKey = "KrissVector", cf = CFrame.new( 152, PICKUP_HEIGHT,    0) },
-	{ weaponKey = "DesertEagle", cf = CFrame.new(-152, PICKUP_HEIGHT, -152) },
-	{ weaponKey = "Uzi",         cf = CFrame.new( 152, PICKUP_HEIGHT, -152) },
-	{ weaponKey = "ARPistol",    cf = CFrame.new(-152, PICKUP_HEIGHT,  152) },
-	{ weaponKey = "Glock19",     cf = CFrame.new( 152, PICKUP_HEIGHT,  152) },
-
-	-- ── Outer ring: blocks at ±228–304 studs (8 pickups) ─────────────────
-	{ weaponKey = "AWP",         cf = CFrame.new(-228, PICKUP_HEIGHT, -228) },
-	{ weaponKey = "DesertEagle", cf = CFrame.new( 228, PICKUP_HEIGHT, -228) },
-	{ weaponKey = "Mossberg500", cf = CFrame.new(-228, PICKUP_HEIGHT,  228) },
-	{ weaponKey = "ARPistol",    cf = CFrame.new( 228, PICKUP_HEIGHT,  228) },
-	{ weaponKey = "AK47",        cf = CFrame.new(   0, PICKUP_HEIGHT, -304) },
-	{ weaponKey = "SCARL",       cf = CFrame.new(   0, PICKUP_HEIGHT,  304) },
-	{ weaponKey = "AWP",         cf = CFrame.new(-304, PICKUP_HEIGHT,    0) },
-	{ weaponKey = "Uzi",         cf = CFrame.new( 304, PICKUP_HEIGHT,    0) },
+	{ weaponKey = "AK47",        cf = CFrame.new(  22, PICKUP_HEIGHT,   0) },  -- E
+	{ weaponKey = "SCARL",       cf = CFrame.new( -22, PICKUP_HEIGHT,   0) },  -- W
+	{ weaponKey = "MAC10",       cf = CFrame.new(   0, PICKUP_HEIGHT,  22) },  -- S
+	{ weaponKey = "KrissVector", cf = CFrame.new(   0, PICKUP_HEIGHT, -22) },  -- N
+	{ weaponKey = "Glock19",     cf = CFrame.new(  16, PICKUP_HEIGHT,  16) },  -- SE
+	{ weaponKey = "DesertEagle", cf = CFrame.new( -16, PICKUP_HEIGHT,  16) },  -- SW
+	{ weaponKey = "Uzi",         cf = CFrame.new(  16, PICKUP_HEIGHT, -16) },  -- NE
+	{ weaponKey = "Mossberg500", cf = CFrame.new( -16, PICKUP_HEIGHT, -16) },  -- NW
+	{ weaponKey = "ARPistol",    cf = CFrame.new(  22, PICKUP_HEIGHT,  16) },  -- ESE
+	{ weaponKey = "AWP",         cf = CFrame.new( -22, PICKUP_HEIGHT, -16) },  -- WNW
 }
 
 -- ============================================================
@@ -100,111 +65,25 @@ pickupsFolder.Name   = "WeaponPickups"
 pickupsFolder.Parent = Workspace
 
 -- ============================================================
--- Factories
+-- Helpers
 -- ============================================================
 
-local function makeBillboard(parent: BasePart, weaponName: string): BillboardGui
-	local bg                  = Instance.new("BillboardGui")
-	bg.Name                   = "Label"
-	bg.Size                   = UDim2.new(0, 140, 0, 36)
-	bg.StudsOffset            = Vector3.new(0, 2.4, 0)
-	bg.AlwaysOnTop            = false
-	bg.ResetOnSpawn           = false
-	bg.Parent                 = parent
-
-	local label               = Instance.new("TextLabel")
-	label.Size                = UDim2.new(1, 0, 1, 0)
-	label.BackgroundColor3    = Color3.fromRGB(15, 15, 15)
-	label.BackgroundTransparency = 0.35
-	label.TextColor3          = Color3.new(1, 1, 1)
-	label.Font                = Enum.Font.GothamBold
-	label.TextSize            = 14
-	label.Text                = weaponName
-	label.Parent              = bg
-
-	local corner              = Instance.new("UICorner")
-	corner.CornerRadius       = UDim.new(0, 6)
-	corner.Parent             = label
-
-	return bg
-end
-
-local function makePickupPart(def: PickupDef): BasePart
-	local weapon     = WeaponData[def.weaponKey]
-	local colour     = TYPE_COLOUR[weapon.Type] or Color3.new(1, 1, 1)
-
-	local part            = Instance.new("Part")
-	part.Name             = def.weaponKey
-	part.Size             = PICKUP_SIZE
-	part.CFrame           = def.cf
-	part.Anchored         = true
-	part.CanCollide       = false
-	part.CastShadow       = false
-	part.Material         = Enum.Material.Neon
-	part.Color            = colour
-	part.Parent           = pickupsFolder
-
-	-- Spinning highlight via a SelectionBox-style visual (lightweight)
-	local selBox          = Instance.new("SelectionBox")
-	selBox.Adornee        = part
-	selBox.Color3         = colour
-	selBox.LineThickness  = 0.04
-	selBox.SurfaceTransparency = 1
-	selBox.Parent         = part
-
-	makeBillboard(part, weapon.Name)
-
-	local prompt              = Instance.new("ProximityPrompt")
-	prompt.ActionText         = "Pick Up"
-	prompt.ObjectText         = weapon.Name
-	prompt.MaxActivationDistance = 8
-	prompt.HoldDuration       = 0
-	prompt.RequiresLineOfSight = false
-	prompt.Parent             = part
-
-	return part
-end
-
--- ============================================================
--- Pickup logic
--- ============================================================
-
-local function hidePickup(part: BasePart)
-	part.Transparency = 1
-	part.CanCollide   = false
-	for _, child in part:GetChildren() do
-		if child:IsA("ProximityPrompt") then
-			(child :: ProximityPrompt).Enabled = false
-		elseif child:IsA("BillboardGui") then
-			child.Enabled = false
+-- Set every BasePart in the model to the given transparency.
+local function setModelTransparency(model: Model, t: number)
+	for _, desc in model:GetDescendants() do
+		if desc:IsA("BasePart") then
+			(desc :: BasePart).Transparency = t
 		end
 	end
 end
 
-local function showPickup(part: BasePart)
-	part.Transparency = 0
-	part.CanCollide   = false  -- stay non-collidable; players walk through
-	for _, child in part:GetChildren() do
-		if child:IsA("ProximityPrompt") then
-			(child :: ProximityPrompt).Enabled = true
-		elseif child:IsA("BillboardGui") then
-			child.Enabled = true
+-- Enable or disable every ProximityPrompt in the model.
+local function setPromptEnabled(model: Model, enabled: boolean)
+	for _, desc in model:GetDescendants() do
+		if desc:IsA("ProximityPrompt") then
+			(desc :: ProximityPrompt).Enabled = enabled
 		end
 	end
-end
-
-local function onPromptTriggered(part: BasePart, weaponKey: string, player: Player)
-	local character = player.Character
-	if not character then return end
-
-	-- Slot 1 = primary; fire pickup event to client via Warp
-	WeaponPickupEvent:Fire(true, player, weaponKey, 1)
-
-	-- Hide pickup; respawn after delay
-	hidePickup(part)
-	task.delay(RESPAWN_DELAY, function()
-		showPickup(part)
-	end)
 end
 
 -- ============================================================
@@ -212,11 +91,69 @@ end
 -- ============================================================
 
 for _, def in PICKUP_DEFS do
-	local part = makePickupPart(def)
-	local weaponKey = def.weaponKey
+	local weapon = WeaponData[def.weaponKey]
+	if not weapon then
+		warn(("[WeaponPickups] Unknown weaponKey '%s' — skipping"):format(def.weaponKey))
+		continue
+	end
 
-	local prompt = part:FindFirstChildWhichIsA("ProximityPrompt") :: ProximityPrompt
+	-- Clone the physical weapon model from ReplicatedStorage/Weapons
+	local template = weaponsFolder:FindFirstChild(def.weaponKey)
+	if not template or not template:IsA("Model") then
+		warn(("[WeaponPickups] No model found for '%s' in ReplicatedStorage.Weapons — skipping"):format(def.weaponKey))
+		continue
+	end
+
+	local model: Model = (template :: Model):Clone()
+	model.Name         = def.weaponKey
+
+	-- Anchor all parts and disable collision so players walk through
+	for _, desc in model:GetDescendants() do
+		if desc:IsA("BasePart") then
+			local bp      = desc :: BasePart
+			bp.Anchored   = true
+			bp.CanCollide = false
+		end
+	end
+
+	-- Position model at the pickup CFrame, then parent into the world
+	model:PivotTo(def.cf)
+	model.Parent = pickupsFolder
+
+	-- ProximityPrompt attaches to Handle; fall back to PrimaryPart if absent
+	local handle = (
+		model:FindFirstChild("Handle") or model.PrimaryPart
+	) :: BasePart?
+
+	if not handle then
+		warn(("[WeaponPickups] '%s' model has no Handle or PrimaryPart — skipping"):format(def.weaponKey))
+		model:Destroy()
+		continue
+	end
+
+	local prompt                    = Instance.new("ProximityPrompt")
+	prompt.ActionText               = "Equip"
+	prompt.ObjectText               = weapon.Name
+	prompt.MaxActivationDistance    = 8
+	prompt.HoldDuration             = 0
+	prompt.RequiresLineOfSight      = false
+	prompt.Parent                   = handle
+
+	local weaponKey = def.weaponKey   -- capture for closure
+
 	prompt.Triggered:Connect(function(player: Player)
-		onPromptTriggered(part, weaponKey, player)
+		if not player.Character then return end
+
+		-- Grant the weapon to the player's inventory via RBX_Toolbox
+		RBXToolbox:GiveWeapon(player, weaponKey)
+
+		-- Hide the pickup for RESPAWN_DELAY seconds, then restore it
+		setModelTransparency(model, 1)
+		setPromptEnabled(model, false)
+
+		task.delay(RESPAWN_DELAY, function()
+			setModelTransparency(model, 0)
+			setPromptEnabled(model, true)
+		end)
 	end)
 end
