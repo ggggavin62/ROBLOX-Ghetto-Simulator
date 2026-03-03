@@ -46,22 +46,49 @@ local TYPE_COLOUR: { [string]: Color3 } = {
 }
 
 -- 8 pickup definitions: { weaponKey, CFrame }
--- Positions assume a ~100-stud square arena centred at origin.
--- Adjust these to match your actual map layout.
+--
+-- Positions use the procedural city grid from MapSetup.server.luau:
+--   CELL_SIZE = 76, BLOCK_SIZE = 64
+--   Block centres: ±76, ±152, ±228, ±304  (city extent ±336)
+--
+-- Each pickup sits at a block centre (inside a building ground floor).
+-- The ProximityPrompt fires when the player enters and walks within 8 studs.
+-- Y = PICKUP_HEIGHT (1.0) = resting on the building floor slab.
 type PickupDef = {
 	weaponKey: string,
 	cf:        CFrame,
 }
 
 local PICKUP_DEFS: { PickupDef } = {
-	{ weaponKey = "AK47",        cf = CFrame.new( 40,  PICKUP_HEIGHT,   0) },
-	{ weaponKey = "SCARL",       cf = CFrame.new(-40,  PICKUP_HEIGHT,   0) },
-	{ weaponKey = "AWP",         cf = CFrame.new(  0,  PICKUP_HEIGHT,  45) },
-	{ weaponKey = "Mossberg500", cf = CFrame.new(  0,  PICKUP_HEIGHT, -45) },
-	{ weaponKey = "KrissVector", cf = CFrame.new( 35,  PICKUP_HEIGHT,  35) },
-	{ weaponKey = "MAC10",       cf = CFrame.new(-35,  PICKUP_HEIGHT,  35) },
-	{ weaponKey = "DesertEagle", cf = CFrame.new( 35,  PICKUP_HEIGHT, -35) },
-	{ weaponKey = "ARPistol",    cf = CFrame.new(-35,  PICKUP_HEIGHT, -35) },
+	-- ── Inner ring: blocks at ±76 studs from centre (8 pickups) ──────────
+	{ weaponKey = "Glock19",     cf = CFrame.new( -76, PICKUP_HEIGHT,  -76) },
+	{ weaponKey = "Uzi",         cf = CFrame.new(  76, PICKUP_HEIGHT,  -76) },
+	{ weaponKey = "AK47",        cf = CFrame.new( -76, PICKUP_HEIGHT,   76) },
+	{ weaponKey = "SCARL",       cf = CFrame.new(  76, PICKUP_HEIGHT,   76) },
+	{ weaponKey = "MAC10",       cf = CFrame.new(   0, PICKUP_HEIGHT,  -76) },
+	{ weaponKey = "KrissVector", cf = CFrame.new(   0, PICKUP_HEIGHT,   76) },
+	{ weaponKey = "Mossberg500", cf = CFrame.new( -76, PICKUP_HEIGHT,    0) },
+	{ weaponKey = "ARPistol",    cf = CFrame.new(  76, PICKUP_HEIGHT,    0) },
+
+	-- ── Mid ring: blocks at ±152 studs (8 pickups) ───────────────────────
+	{ weaponKey = "AK47",        cf = CFrame.new(   0, PICKUP_HEIGHT, -152) },
+	{ weaponKey = "SCARL",       cf = CFrame.new(   0, PICKUP_HEIGHT,  152) },
+	{ weaponKey = "MAC10",       cf = CFrame.new(-152, PICKUP_HEIGHT,    0) },
+	{ weaponKey = "KrissVector", cf = CFrame.new( 152, PICKUP_HEIGHT,    0) },
+	{ weaponKey = "DesertEagle", cf = CFrame.new(-152, PICKUP_HEIGHT, -152) },
+	{ weaponKey = "Uzi",         cf = CFrame.new( 152, PICKUP_HEIGHT, -152) },
+	{ weaponKey = "ARPistol",    cf = CFrame.new(-152, PICKUP_HEIGHT,  152) },
+	{ weaponKey = "Glock19",     cf = CFrame.new( 152, PICKUP_HEIGHT,  152) },
+
+	-- ── Outer ring: blocks at ±228–304 studs (8 pickups) ─────────────────
+	{ weaponKey = "AWP",         cf = CFrame.new(-228, PICKUP_HEIGHT, -228) },
+	{ weaponKey = "DesertEagle", cf = CFrame.new( 228, PICKUP_HEIGHT, -228) },
+	{ weaponKey = "Mossberg500", cf = CFrame.new(-228, PICKUP_HEIGHT,  228) },
+	{ weaponKey = "ARPistol",    cf = CFrame.new( 228, PICKUP_HEIGHT,  228) },
+	{ weaponKey = "AK47",        cf = CFrame.new(   0, PICKUP_HEIGHT, -304) },
+	{ weaponKey = "SCARL",       cf = CFrame.new(   0, PICKUP_HEIGHT,  304) },
+	{ weaponKey = "AWP",         cf = CFrame.new(-304, PICKUP_HEIGHT,    0) },
+	{ weaponKey = "Uzi",         cf = CFrame.new( 304, PICKUP_HEIGHT,    0) },
 }
 
 -- ============================================================
